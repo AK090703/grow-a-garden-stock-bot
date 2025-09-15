@@ -484,7 +484,7 @@ async def send_weather_embeds(active_weathers: List[dict]):
     guild = ch.guild if hasattr(ch, "guild") else None
     for w in active_weathers[:10]:
         if w.get("end"):
-            line = f"{w['name']} — <t:{int(w['end'])}:R>"
+            line = f"{w['name']} — ends <t:{int(w['end'])}:R>"
         else:
             line = f"{w['name']} — active"
         if ROLE_MENTIONS and guild:
