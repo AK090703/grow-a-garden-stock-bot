@@ -356,7 +356,7 @@ async def send_weather_embeds(active_weathers: List[dict]):
     if _last_weather_hash == h:
         return
     _last_weather_hash = h
-    content = f"**Active Weathers ({len(active_weathers)})**"
+    content = f"**Active Weathers**"
     embeds = []
     roles_to_ping: list[discord.Role] = []
     guild = ch.guild if hasattr(ch, "guild") else None
