@@ -42,6 +42,100 @@ ROLE_PREFIX_MERCHANT  = os.getenv("ROLE_PREFIX_MERCHANT", "")
 ROLE_PREFIX_WEATHERS  = os.getenv("ROLE_PREFIX_WEATHERS", "")
 _ROLE_CACHE: Dict[int, Dict[str, discord.Role]] = {}
 
+ADMIN_ABUSE_WEATHERS = {
+    "Gale",
+    "SpaceTravel",
+    "Disco",
+    "DJJhai",
+    "Blackhole",
+    "JandelStorm",
+    "DJSandstorm",
+    "Volcano",
+    "UnderTheSea",
+    "AlienInvasion",
+    "JandelLazer",
+    "Obby",
+    "PoolParty",
+    "JandelZombie",
+    "RadioactiveCarrot",
+    "Armageddon",
+    "JandelFloat",
+    "ChickenRain",
+    "TK_RouteRunner",
+    "TK_MoneyRain",
+    "TK_LightningStorm",
+    "JandelKatana",
+    "MeteorStrike",
+    "FlamingoFloat",
+    "FlamingoLazer",
+    "JunkbotRaid",
+    "Boil",
+    "Oil",
+    "Stoplight",
+    "ChocolateRain",
+    "boomboxparty",
+    "brainrot_stampede",
+    "brainrot_portal",
+    "dissonant",
+    "beanaura",
+    "jandelufo",
+    "jandelwaldo",
+    "pyramidobby",
+    "wateryourgardens",
+    "raindance",
+    "rainbow",
+    "airhead"
+}
+ADMIN_ABUSE_ROLE_NAME = "Admin Abuse"
+SPECIAL_WEATHER_NAMES = {
+    "SummerHarvest": "Summer Harvest",
+    "AuroraBorealis": "Aurora Borealis",
+    "TropicalRain": "Tropical Rain",
+    "NightEvent": "Night",
+    "SunGod": "Sun God",
+    "MegaHarvest": "Mega Harvest",
+    "BloodMoonEvent": "Blood Moon",
+    "MeteorShower": "Meteor Shower",
+    "SpaceTravel": "Space Travel",
+    "DJJhai": "DJ Jhai",
+    "JandelStorm": "Jandel Storm",
+    "DJSandstorm": "DJ Sandstorm",
+    "UnderTheSea": "Under The Sea",
+    "AlienInvasion": "Alien Invasion",
+    "JandelLazer": "Jandel Lazer",
+    "PoolParty": "Pool Party",
+    "JandelZombie": "Jandel Zombie",
+    "RadioactiveCarrot": "Radioactive Carrot",
+    "ZenAura": "Zen Aura",
+    "CrystalBeams": "Crystal Beams",
+    "JandelFloat": "Jandel Float",
+    "ChickenRain": "Chicken Rain",
+    "TK_RouteRunner": "Route Runner",
+    "TK_MoneyRain": "Money Rain",
+    "TK_LightningStorm": "Lightning Storm",
+    "CorruptZenAura": "Corrupt Zen Aura",
+    "JandelKatana": "Jandel Katana",
+    "AcidRain": "Acid Rain",
+    "MeteorStrike": "Meteor Strike",
+    "FlamingoFloat": "Flamingo Float",
+    "FlamingoLazer": "Flamingo Lazer",
+    "JunkbotRaid": "Junkbot Raid",
+    "KitchenStorm": "Kitchen Storm",
+    "SolarEclipse": "Solar Eclipse",
+    "ChocolateRain": "Chocolate Rain",
+    "beanaura": "Bean Aura",
+    "fairies": "Fairies",
+    "boomboxparty": "Boombox Party",
+    "jandelwaldo": "Jandel Waldo",
+    "wateryourgardens": "Water Your Gardens",
+    "raindance": "Rain Dance",
+}
+
+def repair_weather_name(raw: str) -> str:
+    if not raw:
+        return "(unknown)"
+    return SPECIAL_WEATHER_NAMES.get(raw, raw)
+
 def _map_cat(s: Optional[str]) -> Optional[str]:
     if not s: return None
     s = s.lower().strip()
@@ -169,6 +263,7 @@ def _find_role(guild: discord.Guild, display_name: str, category: str) -> Option
     return None
 
 
+
 async def send_debug(obj):
     if not DEBUG_RAW or not DEBUG_CHANNEL_ID: return
     ch = await _resolve_channel(DEBUG_CHANNEL_ID)
@@ -179,6 +274,7 @@ async def send_debug(obj):
     else:
         fp = io.BytesIO(s.encode("utf-8"))
         await ch.send("Full payload attached:", file=discord.File(fp, filename="payload.json"))
+
 
 
 def parse_stock_payload(raw: dict) -> Tuple[Dict[str, List[dict]], Dict[str, Any]]:
@@ -233,6 +329,32 @@ def parse_weather_payload(raw: dict) -> List[dict]:
             end = int(start + dur)
         icon = w.get("icon") or w.get("image") or w.get("thumbnail")
         out.append({"name": name, "remaining": remaining, "end": int(end), "icon": icon})
+    out.sort(key=lambda x: x["name"].lower())
+    return out
+
+def parse_weather_payload(raw: dict) -> List[dict]:
+    if not isinstance(raw, dict): return []
+    arr = raw.get("weather")
+    if not isinstance(arr, list): return []
+    now = int(time.time())
+    out: List[dict] = []
+    for w in arr:
+        if not isinstance(w, dict) or not w.get("active"):
+            continue
+        raw_name = w.get("weather_name") or w.get("weather_id") or "(unknown)"
+        fixedweather = repair_weather_name(str(raw_name))
+        end = w.get("end_duration_unix") or 0
+        start = w.get("start_duration_unix") or 0
+        dur = w.get("duration")
+        remaining = None
+        if isinstance(end, (int, float)) and end > 0:
+            remaining = max(0, int(end - now))
+            end = int(end)
+        elif isinstance(dur, (int, float)) and isinstance(start, (int, float)) and start > 0:
+            remaining = max(0, int(start + dur - now))
+            end = int(start + dur)
+        icon = w.get("icon") or w.get("image") or w.get("thumbnail")
+        out.append({"name": fixedweather, "raw": str(raw_name), "remaining": remaining, "end": end or 0, "icon": icon,})
     out.sort(key=lambda x: x["name"].lower())
     return out
 
@@ -350,26 +472,32 @@ async def send_weather_embeds(active_weathers: List[dict]):
     if not ch:
         print(f"[warn] no channel for category=weathers (ID={cid})")
         return
-    sig = json.dumps([{"n": w["name"], "e": w.get("end", 0)} for w in active_weathers], sort_keys=True)
+    sig = json.dumps([{"n": w.get("raw", w["name"]), "e": w.get("end", 0)} for w in active_weathers], sort_keys=True)
     global _last_weather_hash
     h = hashlib.sha256(sig.encode()).hexdigest()
     if _last_weather_hash == h:
         return
     _last_weather_hash = h
-    content = f"**Active Weathers**"
-    embeds = []
-    roles_to_ping: list[discord.Role] = []
+    content = f"**Active Weathers ({len(active_weathers)})**"
+    embeds: List[discord.Embed] = []
+    roles_to_ping: List[discord.Role] = []
     guild = ch.guild if hasattr(ch, "guild") else None
     for w in active_weathers[:10]:
         if w.get("end"):
-            line = f"{w['name']} — ends <t:{int(w['end'])}:R>"
+            line = f"{w['name']} — <t:{int(w['end'])}:R>"
         else:
             line = f"{w['name']} — active"
         if ROLE_MENTIONS and guild:
-            r = _find_role(guild, w["name"], "weathers")
-            if r:
-                line += f" {r.mention}"
-                roles_to_ping.append(r)
+            raw_id = w.get("raw", w["name"])
+            role_to_ping = None
+            if raw_id in ADMIN_ABUSE_WEATHERS:
+                role_to_ping = _find_role(guild, ADMIN_ABUSE_ROLE_NAME, "weathers")
+            else:
+                role_to_ping = _find_role(guild, w["name"], "weathers")
+
+            if role_to_ping:
+                line += f" {role_to_ping.mention}"
+                roles_to_ping.append(role_to_ping)
         e = Embed(description=line, color=_color('weathers'))
         if w.get("icon"):
             try:
