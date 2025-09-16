@@ -503,7 +503,7 @@ async def send_weather_embeds(active_weathers: List[dict]):
     content = "\n".join(lines) if lines else "**Active Weathers**"
     embeds: List[discord.Embed] = []
     for w in active_weathers[:10]:
-        desc = f"{w['name']} — ends <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} — active"
+        desc = f"{w['name']} — <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} — active"
         e = Embed(description=desc, color=_color('weathers'))
         if w.get("icon"):
             try:
