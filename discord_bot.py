@@ -495,11 +495,22 @@ async def send_weather_embeds(active_weathers: List[dict]):
     if _last_weather_hash == h:
         return
     _last_weather_hash = h
-    content = f"**Active Weathers**"
-    embeds: List[discord.Embed] = []
-    roles_to_ping: List[discord.Role] = []
     guild = ch.guild if hasattr(ch, "guild") else None
-    for w in active_weathers[:10]:
+    roles_to_ping: List[discord.Role] = []
+    lines: List[str] = []
+    remaining = 2000
+    def add_line(s: str) -> bool:
+        nonlocal remaining
+        need = len(s) + (1 if lines else 0)
+        if need > remaining:
+            return False
+        if lines:
+            lines.append(s)
+        else:
+            lines = [s]
+        remaining -= need
+        return True
+    for w in active_weathers:
         label = w["name"]
         role_to_ping = None
         if ROLE_MENTIONS and guild:
@@ -511,18 +522,26 @@ async def send_weather_embeds(active_weathers: List[dict]):
             if role_to_ping:
                 label = role_to_ping.mention
                 roles_to_ping.append(role_to_ping)
+        if not add_line(label):
+            lines.append(f"… +{len(active_weathers) - len(lines)} more (see embeds)")
+            break
+    content = "\n".join(lines) if lines else "**Active Weathers**"
+    embeds: List[discord.Embed] = []
+    for w in active_weathers[:10]:
         if w.get("end"):
-            line = f"{label} — <t:{int(w['end'])}:R>"
+            desc = f"{w['name']} — <t:{int(w['end'])}:R>"
         else:
-            line = f"{label} — active"
-        e = Embed(description=line, color=_color('weathers'))
+            desc = f"{w['name']} — active"
+        e = Embed(description=desc, color=_color('weathers'))
         if w.get("icon"):
-            try: e.set_thumbnail(url=str(w["icon"]))
-            except Exception: pass
+            try:
+                e.set_thumbnail(url=str(w["icon"]))
+            except Exception:
+                pass
         embeds.append(e)
     overflow = len(active_weathers) - 10
     if overflow > 0:
-        content += f"\n… +{overflow} more"
+        content = (content + ("\n" if content else "")) + f"… +{overflow} more (icons capped to 10)"
     am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
     await ch.send(content=content, embeds=embeds, allowed_mentions=am)
 
