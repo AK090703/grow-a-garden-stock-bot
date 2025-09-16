@@ -43,7 +43,8 @@ ROLE_PREFIX_WEATHERS  = os.getenv("ROLE_PREFIX_WEATHERS", "")
 _ROLE_CACHE: Dict[int, Dict[str, discord.Role]] = {}
 
 ADMIN_ABUSE_WEATHERS = {
-    "Gale",
+    "SummerHarvest",
+    "Mega Harvest",
     "SpaceTravel",
     "Disco",
     "DJJhai",
@@ -59,11 +60,13 @@ ADMIN_ABUSE_WEATHERS = {
     "JandelZombie",
     "RadioactiveCarrot",
     "Armageddon",
+    "ZenAura",
     "JandelFloat",
     "ChickenRain",
     "TK_RouteRunner",
     "TK_MoneyRain",
     "TK_LightningStorm",
+    "CorruptZenAura"
     "JandelKatana",
     "MeteorStrike",
     "FlamingoFloat",
@@ -71,20 +74,26 @@ ADMIN_ABUSE_WEATHERS = {
     "JunkbotRaid",
     "Boil",
     "Oil",
+    "KitchenStorm",
     "Stoplight",
     "ChocolateRain",
-    "boomboxparty",
-    "brainrot_stampede",
-    "brainrot_portal",
-    "dissonant",
-    "beanaura",
-    "jandelufo",
-    "jandelwaldo",
-    "pyramidobby",
-    "wateryourgardens",
-    "raindance",
-    "rainbow",
-    "airhead"
+    "Boombox Party",
+    "Brainrot Stampede",
+    "Brainrot Portal",
+    "Dissonant",
+    "Beanaura",
+    "fairies"
+    "Jandel UFO",
+    "Jandel Waldo",
+    "Pyramid Obby",
+    "Bean Aura",
+    "BoomboxParty",
+    "JandelWaldo",
+    "WaterYourGardens",
+    "RainDance",
+    "Rainbow",
+    "AirHead",
+    "BeeNado"
 }
 ADMIN_ABUSE_ROLE_NAME = "Admin Abuse"
 SPECIAL_WEATHER_NAMES = {
@@ -129,6 +138,7 @@ SPECIAL_WEATHER_NAMES = {
     "jandelwaldo": "Jandel Waldo",
     "wateryourgardens": "Water Your Gardens",
     "raindance": "Rain Dance",
+    "BeeNado": "Beenado"
 }
 
 def repair_weather_name(raw: str) -> str:
@@ -417,27 +427,34 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
     if _last_batch_hash.get(category) == h:
         return
     _last_batch_hash[category] = h
-    title = f"{category.capitalize()} stock"
-    header_mentions: List[str] = []
     roles_to_ping: List[discord.Role] = []
-    if ROLE_MENTIONS and category == "merchant" and title_hint and guild:
-        r = _find_role(guild, title_hint, "merchant")
-        if r:
-            header_mentions.append(r.mention)
-            roles_to_ping.append(r)
-        title += f" — {title_hint}"
-    header = f"**{title} ({len(items)} item{'s' if len(items)!=1 else ''})**"
+    if category == "merchant":
+        header_title = "Merchant stock"
+        header_suffix = ""
+        if ROLE_MENTIONS and guild and title_hint:
+            r = _find_role(guild, title_hint, "merchant")
+            if r:
+                header_suffix = f" — {r.mention}"
+                roles_to_ping.append(r)
+            elif title_hint:
+                header_suffix = f" — {title_hint}"
+        elif title_hint:
+            header_suffix = f" — {title_hint}"
+        header = f"**{header_title}{header_suffix} ({len(items)} item{'s' if len(items)!=1 else ''})**"
+    else:
+        header = f"**{category.capitalize()} stock ({len(items)} item{'s' if len(items)!=1 else ''})**"
     lines = [header]
     remaining_chars = 2000 - len(header) - 1
     for it in items:
         name = str(it.get("name", "(unknown)"))
         qty  = it.get("qty")
-        line = f"• {name} — **{qty}**"
-        if ROLE_MENTIONS and category in ("seeds", "pets", "gears") and guild:
+        label = name
+        if ROLE_MENTIONS and guild and category in ("seeds", "pets", "gears"):
             r = _find_role(guild, name, category)
             if r:
-                line += f" — {r.mention}"
+                label = r.mention
                 roles_to_ping.append(r)
+        line = f"• {label} — **{qty}**"
         if len(line) + 1 <= remaining_chars:
             lines.append(line)
             remaining_chars -= (len(line) + 1)
@@ -478,32 +495,30 @@ async def send_weather_embeds(active_weathers: List[dict]):
     if _last_weather_hash == h:
         return
     _last_weather_hash = h
-    content = f"**Active Weathers ({len(active_weathers)})**"
+    content = f"**Active Weathers**"
     embeds: List[discord.Embed] = []
     roles_to_ping: List[discord.Role] = []
     guild = ch.guild if hasattr(ch, "guild") else None
     for w in active_weathers[:10]:
-        if w.get("end"):
-            line = f"{w['name']} — ends <t:{int(w['end'])}:R>"
-        else:
-            line = f"{w['name']} — active"
+        label = w["name"]
+        role_to_ping = None
         if ROLE_MENTIONS and guild:
             raw_id = w.get("raw", w["name"])
-            role_to_ping = None
             if raw_id in ADMIN_ABUSE_WEATHERS:
                 role_to_ping = _find_role(guild, ADMIN_ABUSE_ROLE_NAME, "weathers")
             else:
                 role_to_ping = _find_role(guild, w["name"], "weathers")
-
             if role_to_ping:
-                line += f" {role_to_ping.mention}"
+                label = role_to_ping.mention
                 roles_to_ping.append(role_to_ping)
+        if w.get("end"):
+            line = f"{label} — <t:{int(w['end'])}:R>"
+        else:
+            line = f"{label} — active"
         e = Embed(description=line, color=_color('weathers'))
         if w.get("icon"):
-            try:
-                e.set_thumbnail(url=str(w["icon"]))
-            except Exception:
-                pass
+            try: e.set_thumbnail(url=str(w["icon"]))
+            except Exception: pass
         embeds.append(e)
     overflow = len(active_weathers) - 10
     if overflow > 0:
