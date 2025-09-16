@@ -66,7 +66,7 @@ ADMIN_ABUSE_WEATHERS = {
     "TK_RouteRunner",
     "TK_MoneyRain",
     "TK_LightningStorm",
-    "CorruptZenAura"
+    "CorruptZenAura",
     "JandelKatana",
     "MeteorStrike",
     "FlamingoFloat",
@@ -82,7 +82,7 @@ ADMIN_ABUSE_WEATHERS = {
     "Brainrot Portal",
     "Dissonant",
     "Beanaura",
-    "fairies"
+    "fairies",
     "Jandel UFO",
     "Jandel Waldo",
     "Pyramid Obby",
@@ -132,12 +132,12 @@ SPECIAL_WEATHER_NAMES = {
     "KitchenStorm": "Kitchen Storm",
     "SolarEclipse": "Solar Eclipse",
     "ChocolateRain": "Chocolate Rain",
-    "beanaura": "Bean Aura",
+    "Beanaura": "Bean Aura",
     "fairies": "Fairies",
-    "boomboxparty": "Boombox Party",
-    "jandelwaldo": "Jandel Waldo",
-    "wateryourgardens": "Water Your Gardens",
-    "raindance": "Rain Dance",
+    "BoomboxParty": "Boombox Party",
+    "JandelWaldo": "Jandel Waldo",
+    "WaterYourGardens": "Water Your Gardens",
+    "RainDance": "Rain Dance",
     "BeeNado": "Beenado"
 }
 
@@ -327,30 +327,6 @@ def parse_weather_payload(raw: dict) -> List[dict]:
     for w in arr:
         if not isinstance(w, dict) or not w.get("active"):
             continue
-        name  = w.get("weather_name") or w.get("weather_id") or "(unknown)"
-        end   = w.get("end_duration_unix") or 0
-        start = w.get("start_duration_unix") or 0
-        dur   = w.get("duration")
-        remaining = None
-        if isinstance(end, (int, float)) and end > 0:
-            remaining = max(0, int(end - now))
-        elif isinstance(dur, (int, float)) and isinstance(start, (int, float)) and start > 0:
-            remaining = max(0, int(start + dur - now))
-            end = int(start + dur)
-        icon = w.get("icon") or w.get("image") or w.get("thumbnail")
-        out.append({"name": name, "remaining": remaining, "end": int(end), "icon": icon})
-    out.sort(key=lambda x: x["name"].lower())
-    return out
-
-def parse_weather_payload(raw: dict) -> List[dict]:
-    if not isinstance(raw, dict): return []
-    arr = raw.get("weather")
-    if not isinstance(arr, list): return []
-    now = int(time.time())
-    out: List[dict] = []
-    for w in arr:
-        if not isinstance(w, dict) or not w.get("active"):
-            continue
         raw_name = w.get("weather_name") or w.get("weather_id") or "(unknown)"
         fixedweather = repair_weather_name(str(raw_name))
         end = w.get("end_duration_unix") or 0
@@ -499,17 +475,16 @@ async def send_weather_embeds(active_weathers: List[dict]):
     roles_to_ping: List[discord.Role] = []
     lines: List[str] = []
     remaining = 2000
+
     def add_line(s: str) -> bool:
         nonlocal remaining
         need = len(s) + (1 if lines else 0)
         if need > remaining:
             return False
-        if lines:
-            lines.append(s)
-        else:
-            lines = [s]
+        lines.append(s)
         remaining -= need
         return True
+
     for w in active_weathers:
         label = w["name"]
         role_to_ping = None
@@ -528,10 +503,7 @@ async def send_weather_embeds(active_weathers: List[dict]):
     content = "\n".join(lines) if lines else "**Active Weathers**"
     embeds: List[discord.Embed] = []
     for w in active_weathers[:10]:
-        if w.get("end"):
-            desc = f"{w['name']} — <t:{int(w['end'])}:R>"
-        else:
-            desc = f"{w['name']} — active"
+        desc = f"{w['name']} — <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} — active"
         e = Embed(description=desc, color=_color('weathers'))
         if w.get("icon"):
             try:
