@@ -532,88 +532,106 @@ async def send_update(category: str, data: dict):
     await ch.send(line)
 
 async def ws_consumer():
+    global _last_merchant_name
     if not EXTERNAL_WS_URL:
-        print("[error] EXTERNAL_WS_URL not set"); await bot.close(); return
+        print("[error] EXTERNAL_WS_URL not set")
+        await bot.close()
+        return
     headers = {}
     if WS_HEADERS_JSON.strip():
-        try: headers = json.loads(WS_HEADERS_JSON)
-        except Exception as e: print(f"[warn] bad WS_HEADERS_JSON: {e}")
+        try:
+            headers = json.loads(WS_HEADERS_JSON)
+        except Exception as e:
+            print(f"[warn] bad WS_HEADERS_JSON: {e}")
     subscribe = None
     if WS_SUBSCRIBE_JSON.strip():
-        try: subscribe = json.loads(WS_SUBSCRIBE_JSON)
-        except Exception as e: print(f"[warn] bad WS_SUBSCRIBE_JSON: {e}")
+        try:
+            subscribe = json.loads(WS_SUBSCRIBE_JSON)
+        except Exception as e:
+            print(f"[warn] bad WS_SUBSCRIBE_JSON: {e}")
     backoff = 1
     async with ClientSession() as session:
         while not bot.is_closed():
             try:
                 print(f"[ws] connecting to {EXTERNAL_WS_URL}")
                 async with session.ws_connect(EXTERNAL_WS_URL, heartbeat=PING_EVERY, headers=headers) as ws:
-                    print("[ws] connected"); backoff = 1
-                    if subscribe: await ws.send_json(subscribe)
-
-                    async def pinger():
-                        while True:
-                            try: await ws.send_str("ping")
-                            except Exception: return
-                            await asyncio.sleep(PING_EVERY)
-                    p = asyncio.create_task(pinger())
+                    print("[ws] connected")
+                    backoff = 1
+                    if subscribe:
+                        try:
+                            await ws.send_json(subscribe)
+                            print("[ws] sent subscribe frame")
+                        except Exception as e:
+                            print(f"[ws] subscribe error: {e}")
                     async for msg in ws:
                         if msg.type == WSMsgType.TEXT:
                             try:
                                 raw = json.loads(msg.data)
+                            except json.JSONDecodeError:
+                                print(f"[ws] bad json :: {str(msg.data)[:200]}")
+                                continue
+                            except Exception as e:
+                                print(f"[ws] unexpected json error: {e}")
+                                continue
 
-                                global _DEBUG_SENT_ONCE
-                                if DEBUG_RAW and not _DEBUG_SENT_ONCE:
-                                    await send_debug(raw); _DEBUG_SENT_ONCE = True
+                            global _DEBUG_SENT_ONCE
+                            if DEBUG_RAW and not _DEBUG_SENT_ONCE:
+                                try:
+                                    await send_debug(raw)
+                                    _DEBUG_SENT_ONCE = True
+                                except Exception as e:
+                                    print(f"[debug] send_debug failed: {e}")
+                            processed_any = False
 
-                                processed_any = False
-                                if isinstance(raw, dict) and (
-                                    any(isinstance(v, list) and isinstance(k, str) and k.endswith("_stock") for k, v in raw.items())
-                                    or isinstance(raw.get("travelingmerchant_stock"), dict)):
+                            if isinstance(raw, dict) and (
+                                any(isinstance(v, list) and isinstance(k, str) and k.endswith("_stock") for k, v in raw.items())
+                                or isinstance(raw.get("travelingmerchant_stock"), dict)):
+                                try:
                                     stock_map, extras = parse_stock_payload(raw)
-                                    global _last_merchant_name
-                                    merchant_items = stock_map.get("merchant", [])
-                                    curr_name = (extras.get("merchant_name") or "").strip() if isinstance(extras, dict) else ""
-                                    if merchant_items and curr_name:
-                                        if _last_merchant_name != curr_name:
+                                except Exception as e:
+                                    print(f"[ws] parse_stock_payload error: {e}")
+                                    stock_map, extras = {}, {}
+                                merchant_items = stock_map.get("merchant", [])
+                                curr_name = (extras.get("merchant_name") or "").strip() if isinstance(extras, dict) else ""
+                                if merchant_items and curr_name:
+                                    if _last_merchant_name != curr_name:
+                                        try:
                                             await send_batch_text("merchant", merchant_items, title_hint=curr_name)
-                                            _last_merchant_name = curr_name
-                                    else:
-                                        pass
-                                    for cat, items in stock_map.items():
-                                        if cat == "merchant": 
-                                            continue
-                                        if cat in CATEGORY_CHANNELS and items:
+                                        except Exception as e:
+                                            print(f"[ws] merchant send error: {e}")
+                                        _last_merchant_name = curr_name
+                                    processed_any = True
+                                for cat, items in stock_map.items():
+                                    if cat == "merchant":
+                                        continue
+                                    if cat in CATEGORY_CHANNELS and items:
+                                        try:
                                             await send_batch_text(cat, items)
                                             processed_any = True
-                                if isinstance(raw, dict) and isinstance(raw.get("weather"), list):
+                                        except Exception as e:
+                                            print(f"[ws] send_batch_text({cat}) error: {e}")
+                            if isinstance(raw, dict) and isinstance(raw.get("weather"), list):
+                                try:
                                     active_weathers = parse_weather_payload(raw)
-                                    if active_weathers:
+                                except Exception as e:
+                                    print(f"[ws] parse_weather_payload error: {e}")
+                                    active_weathers = []
+                                if active_weathers:
+                                    try:
                                         await send_weather_embeds(active_weathers)
-                                        processed_any = True
-                                if not processed_any:
-                                    events = raw if isinstance(raw, list) else [raw]
-                                    for ev in events:
-                                        norm = normalize(ev)
-                                        if not norm: continue
-                                        cat = norm.get("category")
-                                        if cat in CATEGORY_CHANNELS:
-                                            await send_update(cat, {
-                                                "category": cat,
-                                                "item": norm.get("item"),
-                                                "stock": norm.get("stock"),
-                                            })
-                            except Exception as e:
-                                print(f"[ws] bad payload: {e} :: {str(msg.data)[:200]}")
+                                    except Exception as e:
+                                        print(f"[ws] send_weather_embeds error: {e}")
+                                processed_any = True
                         elif msg.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
+                            print("[ws] stream closed")
                             break
-                    p.cancel()
                     print("[ws] disconnected; reconnecting")
             except (ClientConnectorError, WSServerHandshakeError) as e:
                 print(f"[ws] connect error: {e}")
             except Exception as e:
                 print(f"[ws] unexpected: {e}")
-            await asyncio.sleep(min(backoff, 30)); backoff *= 2
+            await asyncio.sleep(min(backoff, 30))
+            backoff *= 2
 
 @bot.event
 async def on_ready():
