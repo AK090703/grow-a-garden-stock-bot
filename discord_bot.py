@@ -539,7 +539,7 @@ async def send_update(category: str, data: dict):
     await ch.send(line)
 
 async def ws_consumer():
-    global _last_merchant_name
+    global _last_merchant_name, _last_merchant_sig, _last_merchant_at
     if not EXTERNAL_WS_URL:
         print("[error] EXTERNAL_WS_URL not set")
         await bot.close()
@@ -617,7 +617,6 @@ async def ws_consumer():
                                     if announce:
                                         try:
                                             await send_batch_text("merchant", merchant_items, title_hint=curr_name)
-                                            global _last_merchant_name, _last_merchant_sig, _last_merchant_at
                                             _last_merchant_name = curr_name
                                             _last_merchant_sig  = curr_sig
                                             _last_merchant_at   = now
