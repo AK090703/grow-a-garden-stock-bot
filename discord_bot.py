@@ -160,10 +160,12 @@ _last_batch_hash: Dict[str, str] = {}
 _last_item_hash: Dict[Tuple[str, str], str] = {}
 _last_weather_hash: Optional[str] = None
 _last_presence: Dict[str, bool] = {"merchant": False}
-_last_merchant_name: Optional[str] = None
-_last_cosmetics_sig: Optional[str] = None
 _last_cosmetics_at: float = 0.0
 COSMETICS_COOLDOWN_MINUTES = int(os.getenv("COSMETICS_COOLDOWN_MINUTES", "240")) # 4 hours default
+MERCHANT_SUPPRESS_MINUTES = int(os.getenv("MERCHANT_SUPPRESS_MINUTES", "30"))
+_last_merchant_name: Optional[str] = None
+_last_merchant_sig: Optional[str] = None
+_last_merchant_at: float = 0.0
 
 async def _resolve_channel(cid: int):
     if not cid: return None
@@ -232,6 +234,11 @@ def _signature_for_cosmetics(items: List[dict]) -> str:
         q = it.get("qty")
         norm.append({"n": n, "q": q})
     norm.sort(key=lambda d: (d["n"], d["q"] if d["q"] is not None else -1))
+    return hashlib.sha256(json.dumps(norm, sort_keys=True).encode()).hexdigest()
+
+def _merchant_signature(items: List[dict]) -> str:
+    norm = [{"n": str(i.get("name","")), "q": i.get("qty")} for i in items]
+    norm.sort(key=lambda x: (x["n"].lower(), x["q"] if x["q"] is not None else -1))
     return hashlib.sha256(json.dumps(norm, sort_keys=True).encode()).hexdigest()
 
 def _slug(s: str) -> str:
@@ -594,12 +601,28 @@ async def ws_consumer():
                                 merchant_items = stock_map.get("merchant", [])
                                 curr_name = (extras.get("merchant_name") or "").strip() if isinstance(extras, dict) else ""
                                 if merchant_items and curr_name:
+                                    try:
+                                        curr_sig = _merchant_signature(merchant_items)
+                                    except Exception as e:
+                                        print(f"[ws] merchant sig error: {e}")
+                                        curr_sig = None
+                                    now = time.time()
+                                    announce = False
                                     if _last_merchant_name != curr_name:
+                                        announce = True
+                                    else:
+                                        if (_last_merchant_at == 0.0) or (now - _last_merchant_at >= MERCHANT_SUPPRESS_MINUTES * 60):
+                                            if curr_sig and (_last_merchant_sig != curr_sig):
+                                                announce = True
+                                    if announce:
                                         try:
                                             await send_batch_text("merchant", merchant_items, title_hint=curr_name)
+                                            global _last_merchant_name, _last_merchant_sig, _last_merchant_at
+                                            _last_merchant_name = curr_name
+                                            _last_merchant_sig  = curr_sig
+                                            _last_merchant_at   = now
                                         except Exception as e:
                                             print(f"[ws] merchant send error: {e}")
-                                        _last_merchant_name = curr_name
                                     processed_any = True
                                 for cat, items in stock_map.items():
                                     if cat == "merchant":
