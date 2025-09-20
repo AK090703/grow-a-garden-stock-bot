@@ -158,6 +158,7 @@ def _color(cat: str) -> int:
 
 intents = Intents.default()
 bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
 _last_batch_hash: Dict[str, str] = {}
 _last_item_hash: Dict[Tuple[str, str], str] = {}
 _last_weather_hash: Optional[str] = None
@@ -183,7 +184,7 @@ async def _resolve_channel(cid: int):
             return None
     return ch
 
-@bot.tree.command(name="payload", description="Download the latest raw payload as payload.json")
+@tree.command(name="payload", description="Download the latest raw payload as payload.json")
 async def payload_cmd(interaction: discord.Interaction):
     if DEBUG_CHANNEL_ID and interaction.channel_id != DEBUG_CHANNEL_ID:
         await interaction.response.send_message(
@@ -754,7 +755,7 @@ async def ws_consumer():
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     try:
-        await bot.tree.sync()
+        await tree.sync()
         print("[slash] commands synced")
     except Exception as e:
         print(f"[slash] sync failed: {e}")
