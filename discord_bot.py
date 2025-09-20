@@ -95,7 +95,12 @@ ADMIN_ABUSE_WEATHERS = {
     "RainDance",
     "Rainbow",
     "AirHead",
-    "BeeNado"
+    "BeeNado",
+    "Sunset",
+    "GiantSwordPull",
+    "IceKing",
+    "JandelUFO",
+    "Tsunami"
 }
 ADMIN_ABUSE_ROLE_NAME = "Admin Abuse"
 SPECIAL_WEATHER_NAMES = {
@@ -140,7 +145,10 @@ SPECIAL_WEATHER_NAMES = {
     "JandelWaldo": "Jandel Waldo",
     "WaterYourGardens": "Water Your Gardens",
     "RainDance": "Rain Dance",
-    "BeeNado": "Beenado"
+    "BeeNado": "Beenado",
+    "GiantSwordPull": "Giant Sword Pull",
+    "IceKing": "Ice King",
+    "JandelUFO": "Jandel UFO"
 }
 
 def repair_weather_name(raw: str) -> str:
@@ -172,6 +180,9 @@ _last_merchant_at: float = 0.0
 SINGLE_ITEM_DEBOUNCE_SEC = int(os.getenv("SINGLE_ITEM_DEBOUNCE_SEC", "5"))
 _last_announced_snapshot: Dict[str, Dict[str, int]] = {"seeds": {}, "pets": {}, "gears": {}}
 _single_change_debounce: Dict[str, Dict[str, Any]] = {}
+WEATHER_SUPPRESS_WINDOW_SEC = int(os.getenv("WEATHER_SUPPRESS_WINDOW_SEC", "10"))
+_last_weather_announced_set: set[str] = set()
+_last_weather_msg_time: float = 0.0
 
 async def _resolve_channel(cid: int):
     if not cid: return None
@@ -553,12 +564,23 @@ async def send_weather_embeds(active_weathers: List[dict]):
         print(f"[warn] no channel for category=weathers (ID={cid})")
         return
     sig = json.dumps([{"n": w.get("raw", w["name"]), "e": w.get("end", 0)} for w in active_weathers], sort_keys=True)
-    global _last_weather_hash
+    global _last_weather_hash, _last_weather_announced_set, _last_weather_msg_time
     h = hashlib.sha256(sig.encode()).hexdigest()
     if _last_weather_hash == h:
         return
     _last_weather_hash = h
+    now = time.time()
     guild = ch.guild if hasattr(ch, "guild") else None
+    current_raws = {w.get("raw", w["name"]) for w in active_weathers}
+    _last_weather_announced_set &= current_raws
+    within_window = (now - _last_weather_msg_time) <= WEATHER_SUPPRESS_WINDOW_SEC if _last_weather_msg_time else False
+    if within_window:
+        filtered = [w for w in active_weathers if w.get("raw", w["name"]) not in _last_weather_announced_set]
+        if not filtered:
+            return
+        to_post = filtered
+    else:
+        to_post = active_weathers
     roles_to_ping: List[discord.Role] = []
     lines: List[str] = []
     remaining = 2000
@@ -572,7 +594,7 @@ async def send_weather_embeds(active_weathers: List[dict]):
         remaining -= need
         return True
 
-    for w in active_weathers:
+    for w in to_post:
         label = w["name"]
         role_to_ping = None
         if ROLE_MENTIONS and guild:
@@ -585,12 +607,11 @@ async def send_weather_embeds(active_weathers: List[dict]):
                 label = role_to_ping.mention
                 roles_to_ping.append(role_to_ping)
         if not add_line(label):
-            lines.append(f"… +{len(active_weathers) - len(lines)} more (see embeds)")
             break
     content = "\n".join(lines) if lines else "**Active Weathers**"
     embeds: List[discord.Embed] = []
-    for w in active_weathers[:10]:
-        desc = f"{w['name']} — ends <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} — active"
+    for w in to_post[:10]:
+        desc = f"{w['name']} — <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} — active"
         e = Embed(description=desc, color=_color('weathers'))
         if w.get("icon"):
             try:
@@ -598,11 +619,10 @@ async def send_weather_embeds(active_weathers: List[dict]):
             except Exception:
                 pass
         embeds.append(e)
-    overflow = len(active_weathers) - 10
-    if overflow > 0:
-        content = (content + ("\n" if content else "")) + f"… +{overflow} more (icons capped to 10)"
     am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
     await ch.send(content=content, embeds=embeds, allowed_mentions=am)
+    _last_weather_msg_time = now
+    _last_weather_announced_set |= {w.get("raw", w["name"]) for w in to_post}
 
 async def send_update(category: str, data: dict):
     cid = CATEGORY_CHANNELS.get(category, 0)
