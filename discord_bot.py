@@ -13,7 +13,6 @@ EXTERNAL_WS_URL = os.getenv("EXTERNAL_WS_URL")
 WS_HEADERS_JSON   = os.getenv("WS_HEADERS_JSON", "")
 WS_SUBSCRIBE_JSON = os.getenv("WS_SUBSCRIBE_JSON", "")
 PING_EVERY = int(os.getenv("WS_PING_INTERVAL", "20"))
-
 DEBUG_RAW = os.getenv("DEBUG_RAW", "0") == "1"
 DEBUG_CHANNEL_ID = int(os.getenv("DEBUG_CHANNEL_ID", "0"))
 _DEBUG_SENT_ONCE = False
