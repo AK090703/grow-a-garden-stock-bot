@@ -2,7 +2,7 @@ import os, json, asyncio, hashlib, signal, sys, io, time, re
 from typing import Dict, Tuple, Optional, List, Any
 
 import discord
-from discord import Embed, Intents, AllowedMentions
+from discord import Embed, Intents, AllowedMentions, app_commands
 from aiohttp import ClientSession, ClientConnectorError, WSMsgType, web
 from aiohttp.client_exceptions import WSServerHandshakeError
 from dotenv import load_dotenv
@@ -17,6 +17,8 @@ PING_EVERY = int(os.getenv("WS_PING_INTERVAL", "20"))
 DEBUG_RAW = os.getenv("DEBUG_RAW", "0") == "1"
 DEBUG_CHANNEL_ID = int(os.getenv("DEBUG_CHANNEL_ID", "0"))
 _DEBUG_SENT_ONCE = False
+DEBUG_CAPTURE_PAYLOAD = os.getenv("DEBUG_CAPTURE_PAYLOAD", "0") == "1"
+_last_raw_payload: Optional[dict] = None
 
 CATEGORY_CHANNELS = {
     "seeds":     int(os.getenv("CHANNEL_SEEDS", "0")),
@@ -156,6 +158,7 @@ def _color(cat: str) -> int:
 
 intents = Intents.default()
 bot = discord.Client(intents=intents)
+tree = app_commands.CommandTree(bot)
 _last_batch_hash: Dict[str, str] = {}
 _last_item_hash: Dict[Tuple[str, str], str] = {}
 _last_weather_hash: Optional[str] = None
@@ -182,6 +185,23 @@ async def _resolve_channel(cid: int):
             print(f"[warn] cannot fetch channel {cid}: {e}")
             return None
     return ch
+
+@tree.command(name="payload", description="Download the latest raw payload as payload.json")
+async def payload_cmd(interaction: discord.Interaction):
+    if DEBUG_CHANNEL_ID and interaction.channel_id != DEBUG_CHANNEL_ID:
+        await interaction.response.send_message(f"Please use this command in <#{DEBUG_CHANNEL_ID}>.", ephemeral=True)
+        return
+    if not DEBUG_CAPTURE_PAYLOAD:
+        await interaction.response.send_message("Payload capture is disabled. Set DEBUG_CAPTURE_PAYLOAD=1 and redeploy.", ephemeral=True)
+        return
+    if not _last_raw_payload:
+        await interaction.response.send_message("No payload captured yet.", ephemeral=True)
+        return
+    buf = io.StringIO()
+    json.dump(_last_raw_payload, buf, indent=2)
+    data = buf.getvalue().encode("utf-8")
+    file = discord.File(fp=io.BytesIO(data), filename="payload.json")
+    await interaction.response.send_message(content="Latest payload:", file=file, ephemeral=False)
 
 ORDER_CONFIG_PATH = os.getenv("ORDER_CONFIG_PATH", "order_config.json")
 
@@ -630,6 +650,9 @@ async def ws_consumer():
                         if msg.type == WSMsgType.TEXT:
                             try:
                                 raw = json.loads(msg.data)
+                                global _last_raw_payload
+                                if DEBUG_CAPTURE_PAYLOAD:
+                                    _last_raw_payload = raw
                             except json.JSONDecodeError:
                                 print(f"[ws] bad json :: {str(msg.data)[:200]}")
                                 continue
@@ -727,6 +750,11 @@ async def ws_consumer():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    try:
+        await tree.sync()
+        print("[slash] commands synced")
+    except Exception as e:
+        print(f"[slash] sync failed: {e}")
     bot.loop.create_task(ws_consumer())
 
 def shutdown(*_):
