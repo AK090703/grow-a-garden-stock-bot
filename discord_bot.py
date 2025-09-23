@@ -523,9 +523,12 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
     if category == "cosmetics":
         global _last_cosmetics_sig, _last_cosmetics_at
         sig = _signature_for_cosmetics(items)
+        now = time.time()
+        if _last_cosmetics_sig is None:
+            _last_cosmetics_sig = sig
+            return
         if _last_cosmetics_sig == sig:
             return
-        now = time.time()
         if (_last_cosmetics_at > 0) and (now - _last_cosmetics_at < COSMETICS_COOLDOWN_MINUTES * 60):
             return
         _last_cosmetics_sig = sig
