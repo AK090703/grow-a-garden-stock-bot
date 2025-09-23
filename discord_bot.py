@@ -510,6 +510,8 @@ def _build_text_lines(category: str, items: List[dict], title_hint: Optional[str
     return "\n".join(lines)
 
 async def send_batch_text(category: str, items: List[dict], title_hint: Optional[str] = None):
+    if category == "merchant" and not items:
+        return None
     cid = CATEGORY_CHANNELS.get(category, 0)
     ch = await _resolve_channel(cid)
     if not ch:
@@ -745,29 +747,34 @@ async def ws_consumer():
                                     stock_map, extras = {}, {}
                                 merchant_items = stock_map.get("merchant", [])
                                 curr_name = (extras.get("merchant_name") or "").strip() if isinstance(extras, dict) else ""
-                                if merchant_items and curr_name:
-                                    try:
-                                        curr_sig = _merchant_signature(merchant_items)
-                                    except Exception as e:
-                                        print(f"[ws] merchant sig error: {e}")
-                                        curr_sig = None
-                                now = time.time()
-                                announce = False
-                                if _last_merchant_name != curr_name:
-                                    announce = True
+                                if curr_name:
+                                    if merchant_items:
+                                        try:
+                                            curr_sig = _merchant_signature(merchant_items)
+                                        except Exception as e:
+                                            print(f"[ws] merchant sig error: {e}")
+                                            curr_sig = None
+                                    now = time.time()
+                                    announce = False
+                                    if _last_merchant_name != curr_name:
+                                        announce = True
+                                    else:
+                                        if (_last_merchant_at == 0.0) or (now - _last_merchant_at >= MERCHANT_SUPPRESS_MINUTES * 60):
+                                            if curr_sig and (_last_merchant_sig != curr_sig):
+                                                announce = True
+                                    if announce:
+                                        try:
+                                            await send_batch_text("merchant", merchant_items, title_hint=curr_name)
+                                            _last_merchant_name = curr_name
+                                            _last_merchant_sig  = curr_sig
+                                            _last_merchant_at   = now
+                                        except Exception as e:
+                                            print(f"[ws] merchant send error: {e}")
+                                    processed_any = True
                                 else:
-                                    if (_last_merchant_at == 0.0) or (now - _last_merchant_at >= MERCHANT_SUPPRESS_MINUTES * 60):
-                                        if curr_sig and (_last_merchant_sig != curr_sig):
-                                            announce = True
-                                if announce:
-                                    try:
-                                        await send_batch_text("merchant", merchant_items, title_hint=curr_name)
-                                        _last_merchant_name = curr_name
-                                        _last_merchant_sig  = curr_sig
-                                        _last_merchant_at   = now
-                                    except Exception as e:
-                                        print(f"[ws] merchant send error: {e}")
-                                processed_any = True
+                                    _last_merchant_sig = None
+                                    _last_merchant_at  = 0.0
+                                    processed_any = True
                                 for cat, items in stock_map.items():
                                     if cat == "merchant":
                                         continue
