@@ -98,7 +98,6 @@ ADMIN_ABUSE_WEATHERS = {
     "BeeNado",
     "Sunset",
     "GiantSwordPull",
-    "IceKing",
     "JandelUFO",
     "Tsunami"
 }
