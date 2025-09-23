@@ -28,13 +28,6 @@ CATEGORY_CHANNELS = {
     "gears":     int(os.getenv("CHANNEL_GEARS", "0")),
     "merchant":  int(os.getenv("CHANNEL_MERCHANT", "0")),
 }
-
-# Sanity: verify channel wiring on boot
-print("[boot] CATEGORY_CHANNELS =", CATEGORY_CHANNELS)
-if not CATEGORY_CHANNELS.get("cosmetics", 0):
-    print("[warn] cosmetics channel ID missing; set CHANNEL_COSMETICS in env")
-
-
 ALIAS = {
     "egg": "pets", "eggs": "pets",
     "weather": "weathers", "weathers": "weathers",
@@ -178,7 +171,7 @@ _last_item_hash: Dict[Tuple[str, str], str] = {}
 _last_weather_hash: Optional[str] = None
 _last_presence: Dict[str, bool] = {"merchant": False}
 _last_cosmetics_at: float = 0.0
-COSMETICS_COOLDOWN_MINUTES = int(os.getenv("COSMETICS_COOLDOWN_MINUTES", "0"))
+COSMETICS_COOLDOWN_MINUTES = int(os.getenv("COSMETICS_COOLDOWN_MINUTES", "240"))
 MERCHANT_SUPPRESS_MINUTES = int(os.getenv("MERCHANT_SUPPRESS_MINUTES", "30"))
 _last_merchant_name: Optional[str] = None
 _last_merchant_sig: Optional[str] = None
@@ -391,65 +384,36 @@ def _start_or_reset_debounce(cat: str, items: List[dict]):
         "task": asyncio.create_task(_debounced_send_after(cat)),
     }
 
-def parse_stock_payload(raw: dict) -> tuple[dict, dict]:
-    """
-    Returns (stock_map, extras) where stock_map keys are:
-      'seeds', 'pets', 'cosmetics', 'gears', 'merchant'
-    """
-    stock_map: dict[str, list] = {"seeds": [], "pets": [], "cosmetics": [], "gears": [], "merchant": []}
-    extras: dict = {}
-
+def parse_stock_payload(raw: dict) -> Tuple[Dict[str, List[dict]], Dict[str, Any]]:
+    stock_map: Dict[str, List[dict]] = {}
+    extras: Dict[str, Any] = {}
     if not isinstance(raw, dict):
         return stock_map, extras
-
-    # Accept common key variants from community feeds
-    key_map = {
-        "seed_stock": "seeds",
-        "seeds_stock": "seeds",
-        "pet_stock": "pets",
-        "pets_stock": "pets",
-        "cosmetic_stock": "cosmetics",
-        "cosmetics_stock": "cosmetics",
-        "gear_stock": "gears",
-        "gears_stock": "gears",
-        "travelingmerchant_stock": "merchant",
-        "merchant_stock": "merchant",
-    }
-
-    for k, v in raw.items():
-        if not isinstance(k, str):
-            continue
-        tgt = key_map.get(k.lower())
-        if not tgt:
-            continue
-
-        if tgt == "merchant" and isinstance(v, dict):
-            # { items: [...], name: "Gnome Traveling Merchant" }
-            items = v.get("items") if isinstance(v.get("items"), list) else []
-            name  = v.get("name") or v.get("merchant_name") or ""
-            extras["merchant_name"] = str(name).strip()
-            stock_map["merchant"] = [
-                {"name": str(it.get("display_name") or it.get("name") or it.get("item_id") or "").strip(),
-                 "qty":  int(it.get("quantity") or it.get("qty") or 0)}
-                for it in items if isinstance(it, dict)
-            ]
-        elif isinstance(v, list):
-            # Normalize stock lists
-            stock_map[tgt] = [
-                {"name": str(it.get("display_name") or it.get("name") or it.get("item_id") or "").strip(),
-                 "qty":  int(it.get("quantity") or it.get("qty") or 0)}
-                for it in v if isinstance(it, dict)
-            ]
-
-    # Breadcrumbs
-    print("[parse] seeds:", len(stock_map["seeds"]),
-          "pets:", len(stock_map["pets"]),
-          "cosmetics:", len(stock_map["cosmetics"]),
-          "gears:", len(stock_map["gears"]),
-          "merchant:", len(stock_map["merchant"]))
-
+    for key, items in raw.items():
+        if isinstance(key, str) and key.endswith("_stock") and isinstance(items, list):
+            base = key[:-6]
+            base = base.rstrip("s")
+            category = _map_cat(base)
+            if category not in CATEGORY_CHANNELS:
+                continue
+            stock_map.setdefault(category, [])
+            for it in items:
+                name = it.get("display_name") or it.get("item_id") or it.get("name") or "(unknown)"
+                qty  = it.get("quantity") or it.get("stock") or it.get("amount") or it.get("qty")
+                ts   = it.get("Date_Start") or it.get("Date_Start_ISO") or it.get("ts") or it.get("start_date_unix")
+                stock_map[category].append({"name": name, "qty": qty, "ts": ts})
+    tm = raw.get("travelingmerchant_stock")
+    if isinstance(tm, dict):
+        items = tm.get("stock") or []
+        extras["merchant_name"] = tm.get("merchantName") or tm.get("merchant_name")
+        category = "merchant"
+        stock_map.setdefault(category, [])
+        for it in items:
+            name = it.get("display_name") or it.get("item_id") or it.get("name") or "(unknown)"
+            qty  = it.get("quantity") or it.get("stock") or it.get("amount") or it.get("qty")
+            ts   = it.get("Date_Start") or it.get("Date_Start_ISO") or it.get("ts") or it.get("start_date_unix")
+            stock_map[category].append({"name": name, "qty": qty, "ts": ts})
     return stock_map, extras
-
 
 def parse_weather_payload(raw: dict) -> List[dict]:
     if not isinstance(raw, dict): return []
@@ -512,66 +476,31 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
     ch = await _resolve_channel(cid)
     if not ch:
         print(f"[warn] no channel for category={category} (ID={cid})")
-        return None
-
+        return
     guild = ch.guild if hasattr(ch, "guild") else None
-
-    # Apply custom ordering for these categories
     if category in ("seeds", "pets", "gears"):
         items = sort_items(category, items)
-
-    # -------- COSMETICS: cooldown + identical-sig suppression (no mentions) --------
     if category == "cosmetics":
         global _last_cosmetics_sig, _last_cosmetics_at
         sig = _signature_for_cosmetics(items)
-        now = time.time()
-        elapsed = (now - _last_cosmetics_at) if _last_cosmetics_at else 1e9
-
-        print(f"[cosmetics] sig={sig[:8]} prev={(_last_cosmetics_sig or '')[:8]} "
-              f"elapsed={elapsed:.1f}s cool={COSMETICS_COOLDOWN_MINUTES}m")
-
         if _last_cosmetics_sig == sig:
-            print("[cosmetics] skip: identical")
-            return None
-
-        if (_last_cosmetics_at > 0) and (elapsed < COSMETICS_COOLDOWN_MINUTES * 60):
-            print("[cosmetics] skip: cooldown")
-            return None
-
-        header = f"**Cosmetics stock ({len(items)} item{'s' if len(items)!=1 else ''})**"
-        lines = [header]
-        remaining = 2000 - len(header) - 1
-        for it in items:
-            name = str(it.get("name", "(unknown)"))
-            qty  = int(it.get("qty") or 0)
-            line = f"• {name} — **{qty}**"
-            if len(line) + 1 <= remaining:
-                lines.append(line)
-                remaining -= (len(line) + 1)
-            else:
-                lines.append(f"… +{len(items) - (len(lines)-1)} more")
-                break
-
-        content = "\n".join(lines)
-        msg = await ch.send(content)
+            return
+        now = time.time()
+        if (_last_cosmetics_at > 0) and (now - _last_cosmetics_at < COSMETICS_COOLDOWN_MINUTES * 60):
+            return
         _last_cosmetics_sig = sig
         _last_cosmetics_at = now
-        print("[cosmetics] posted")
-        return msg
-    # ------------------------------------------------------------------------------
-
-    # Hash to suppress repeats for other categories (incl. merchant titles)
+        content = _build_text_lines(category, items, title_hint=title_hint)
+        await ch.send(content)
+        return
     batch_signature = json.dumps([{"n": it.get("name"), "q": it.get("qty")} for it in items], sort_keys=False)
     if title_hint:
         batch_signature += f"|{title_hint}"
     h = hashlib.sha256(batch_signature.encode()).hexdigest()
     if _last_batch_hash.get(category) == h:
-        return None
+        return
     _last_batch_hash[category] = h
-
     roles_to_ping: List[discord.Role] = []
-
-    # Header
     if category == "merchant":
         header_title = "Merchant stock"
         header_suffix = ""
@@ -587,10 +516,8 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         header = f"**{header_title}{header_suffix} ({len(items)} item{'s' if len(items)!=1 else ''})**"
     else:
         header = f"**{category.capitalize()} stock ({len(items)} item{'s' if len(items)!=1 else ''})**"
-
     lines = [header]
     remaining_chars = 2000 - len(header) - 1
-
     for it in items:
         name = str(it.get("name", "(unknown)"))
         qty  = it.get("qty")
@@ -607,11 +534,9 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         else:
             lines.append(f"… +{len(items) - (len(lines)-1)} more")
             break
-
     content = "\n".join(lines)
     am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
-    return await ch.send(content, allowed_mentions=am)
-
+    await ch.send(content, allowed_mentions=am)
 
 async def send_absent_notice(category: str, title_hint: Optional[str] = None):
     cid = CATEGORY_CHANNELS.get(category, 0)
@@ -801,7 +726,6 @@ async def ws_consumer():
                                             print(f"[ws] merchant send error: {e}")
                                     processed_any = True
                                 for cat, items in stock_map.items():
-                                    print(f"[ws] cat={cat} items={len(items) if isinstance(items, list) else 'n/a'}")
                                     if cat == "merchant":
                                         continue
                                     if cat not in CATEGORY_CHANNELS or not items:
@@ -818,14 +742,11 @@ async def ws_consumer():
                                                     _cancel_debounce(cat)
                                                 await send_batch_text(cat, items)
                                                 _last_announced_snapshot[cat] = curr_map
-                                        elif cat == "cosmetics":  # explicit
-                                            await send_batch_text(cat, items)
                                         else:
                                             await send_batch_text(cat, items)
                                         processed_any = True
                                     except Exception as e:
                                         print(f"[ws] send_batch_text({cat}) error: {e}")
-
                             if isinstance(raw, dict) and isinstance(raw.get("weather"), list):
                                 try:
                                     active_weathers = parse_weather_payload(raw)
