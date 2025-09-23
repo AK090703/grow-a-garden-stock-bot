@@ -171,7 +171,7 @@ _last_item_hash: Dict[Tuple[str, str], str] = {}
 _last_weather_hash: Optional[str] = None
 _last_presence: Dict[str, bool] = {"merchant": False}
 _last_cosmetics_at: float = 0.0
-COSMETICS_COOLDOWN_MINUTES = int(os.getenv("COSMETICS_COOLDOWN_MINUTES", "240"))
+COSMETICS_COOLDOWN_MINUTES = int(os.getenv("COSMETICS_COOLDOWN_MINUTES", "0"))
 MERCHANT_SUPPRESS_MINUTES = int(os.getenv("MERCHANT_SUPPRESS_MINUTES", "30"))
 _last_merchant_name: Optional[str] = None
 _last_merchant_sig: Optional[str] = None
@@ -481,18 +481,29 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
     if category in ("seeds", "pets", "gears"):
         items = sort_items(category, items)
     if category == "cosmetics":
-        global _last_cosmetics_sig, _last_cosmetics_at
-        sig = _signature_for_cosmetics(items)
-        if _last_cosmetics_sig == sig:
-            return
-        now = time.time()
-        if (_last_cosmetics_at > 0) and (now - _last_cosmetics_at < COSMETICS_COOLDOWN_MINUTES * 60):
-            return
-        _last_cosmetics_sig = sig
-        _last_cosmetics_at = now
-        content = _build_text_lines(category, items, title_hint=title_hint)
-        await ch.send(content)
+    global _last_cosmetics_sig, _last_cosmetics_at
+    sig = _signature_for_cosmetics(items)
+
+    now = time.time()
+    elapsed = (now - _last_cosmetics_at) if _last_cosmetics_at else 1e9
+    print(f"[cosmetics] sig={sig[:8]} prev={(_last_cosmetics_sig or '')[:8]} "
+          f"elapsed={elapsed:.1f}s cool={COSMETICS_COOLDOWN_MINUTES}m")
+
+    if _last_cosmetics_sig == sig:
+        print("[cosmetics] skip: identical")
         return
+
+    if (_last_cosmetics_at > 0) and (elapsed < COSMETICS_COOLDOWN_MINUTES * 60):
+        print("[cosmetics] skip: cooldown")
+        return
+
+    _last_cosmetics_sig = sig
+    _last_cosmetics_at = now
+
+    content = _build_text_lines(category, items, title_hint=title_hint)
+    await ch.send(content)
+    print("[cosmetics] posted")
+    return
     batch_signature = json.dumps([{"n": it.get("name"), "q": it.get("qty")} for it in items], sort_keys=False)
     if title_hint:
         batch_signature += f"|{title_hint}"
