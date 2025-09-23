@@ -625,7 +625,6 @@ async def ws_consumer():
                                     except Exception as e:
                                         print(f"[ws] merchant send error: {e}")
                                 processed_any = True
-                                    processed_any = True
                                 for cat, items in stock_map.items():
                                     if cat == "merchant":
                                         continue
