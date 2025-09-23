@@ -481,29 +481,29 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
     if category in ("seeds", "pets", "gears"):
         items = sort_items(category, items)
     if category == "cosmetics":
-    global _last_cosmetics_sig, _last_cosmetics_at
-    sig = _signature_for_cosmetics(items)
+        global _last_cosmetics_sig, _last_cosmetics_at
+        sig = _signature_for_cosmetics(items)
 
-    now = time.time()
-    elapsed = (now - _last_cosmetics_at) if _last_cosmetics_at else 1e9
-    print(f"[cosmetics] sig={sig[:8]} prev={(_last_cosmetics_sig or '')[:8]} "
+        now = time.time()
+        elapsed = (now - _last_cosmetics_at) if _last_cosmetics_at else 1e9
+        print(f"[cosmetics] sig={sig[:8]} prev={(_last_cosmetics_sig or '')[:8]} "
           f"elapsed={elapsed:.1f}s cool={COSMETICS_COOLDOWN_MINUTES}m")
 
-    if _last_cosmetics_sig == sig:
-        print("[cosmetics] skip: identical")
+        if _last_cosmetics_sig == sig:
+            print("[cosmetics] skip: identical")
+            return
+
+        if (_last_cosmetics_at > 0) and (elapsed < COSMETICS_COOLDOWN_MINUTES * 60):
+            print("[cosmetics] skip: cooldown")
+            return
+
+        _last_cosmetics_sig = sig
+        _last_cosmetics_at = now
+
+        content = _build_text_lines(category, items, title_hint=title_hint)
+        await ch.send(content)
+        print("[cosmetics] posted")
         return
-
-    if (_last_cosmetics_at > 0) and (elapsed < COSMETICS_COOLDOWN_MINUTES * 60):
-        print("[cosmetics] skip: cooldown")
-        return
-
-    _last_cosmetics_sig = sig
-    _last_cosmetics_at = now
-
-    content = _build_text_lines(category, items, title_hint=title_hint)
-    await ch.send(content)
-    print("[cosmetics] posted")
-    return
     batch_signature = json.dumps([{"n": it.get("name"), "q": it.get("qty")} for it in items], sort_keys=False)
     if title_hint:
         batch_signature += f"|{title_hint}"
