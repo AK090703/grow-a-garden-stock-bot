@@ -2,7 +2,7 @@ import os, json, asyncio, hashlib, signal, sys, io, time, re
 from typing import Dict, Tuple, Optional, List, Any
 
 import discord
-from discord import Embed, Intents, AllowedMentions, app_commands
+from discord import Embed, Intents, AllowedMentions
 from aiohttp import ClientSession, ClientConnectorError, WSMsgType, web
 from aiohttp.client_exceptions import WSServerHandshakeError
 from dotenv import load_dotenv
@@ -17,8 +17,6 @@ PING_EVERY = int(os.getenv("WS_PING_INTERVAL", "20"))
 DEBUG_RAW = os.getenv("DEBUG_RAW", "0") == "1"
 DEBUG_CHANNEL_ID = int(os.getenv("DEBUG_CHANNEL_ID", "0"))
 _DEBUG_SENT_ONCE = False
-DEBUG_CAPTURE_PAYLOAD = os.getenv("DEBUG_CAPTURE_PAYLOAD", "0") == "1"
-_last_raw_payload: Optional[dict] = None
 
 CATEGORY_CHANNELS = {
     "seeds":     int(os.getenv("CHANNEL_SEEDS", "0")),
@@ -95,11 +93,7 @@ ADMIN_ABUSE_WEATHERS = {
     "RainDance",
     "Rainbow",
     "AirHead",
-    "BeeNado",
-    "Sunset",
-    "GiantSwordPull",
-    "JandelUFO",
-    "Tsunami"
+    "BeeNado"
 }
 ADMIN_ABUSE_ROLE_NAME = "Admin Abuse"
 SPECIAL_WEATHER_NAMES = {
@@ -144,10 +138,7 @@ SPECIAL_WEATHER_NAMES = {
     "JandelWaldo": "Jandel Waldo",
     "WaterYourGardens": "Water Your Gardens",
     "RainDance": "Rain Dance",
-    "BeeNado": "Beenado",
-    "GiantSwordPull": "Giant Sword Pull",
-    "IceKing": "Ice King",
-    "JandelUFO": "Jandel UFO"
+    "BeeNado": "Beenado"
 }
 
 def repair_weather_name(raw: str) -> str:
@@ -165,23 +156,14 @@ def _color(cat: str) -> int:
 
 intents = Intents.default()
 bot = discord.Client(intents=intents)
-tree = app_commands.CommandTree(bot)
 _last_batch_hash: Dict[str, str] = {}
 _last_item_hash: Dict[Tuple[str, str], str] = {}
 _last_weather_hash: Optional[str] = None
 _last_presence: Dict[str, bool] = {"merchant": False}
-_last_cosmetics_at: float = 0.0
-COSMETICS_COOLDOWN_MINUTES = int(os.getenv("COSMETICS_COOLDOWN_MINUTES", "240"))
-MERCHANT_SUPPRESS_MINUTES = int(os.getenv("MERCHANT_SUPPRESS_MINUTES", "30"))
 _last_merchant_name: Optional[str] = None
-_last_merchant_sig: Optional[str] = None
-_last_merchant_at: float = 0.0
-SINGLE_ITEM_DEBOUNCE_SEC = int(os.getenv("SINGLE_ITEM_DEBOUNCE_SEC", "5"))
-_last_announced_snapshot: Dict[str, Dict[str, int]] = {"seeds": {}, "pets": {}, "gears": {}}
-_single_change_debounce: Dict[str, Dict[str, Any]] = {}
-WEATHER_SUPPRESS_WINDOW_SEC = int(os.getenv("WEATHER_SUPPRESS_WINDOW_SEC", "10"))
-_last_weather_announced_set: set[str] = set()
-_last_weather_msg_time: float = 0.0
+_last_cosmetics_sig: Optional[str] = None
+_last_cosmetics_at: float = 0.0
+COSMETICS_COOLDOWN_MINUTES = int(os.getenv("COSMETICS_COOLDOWN_MINUTES", "240")) # 4 hours default
 
 async def _resolve_channel(cid: int):
     if not cid: return None
@@ -193,28 +175,6 @@ async def _resolve_channel(cid: int):
             print(f"[warn] cannot fetch channel {cid}: {e}")
             return None
     return ch
-
-@tree.command(name="payload", description="Download the latest raw payload as payload.json")
-async def payload_cmd(interaction: discord.Interaction):
-    if DEBUG_CHANNEL_ID and interaction.channel_id != DEBUG_CHANNEL_ID:
-        await interaction.response.send_message(
-            f"Please use this command in <#{DEBUG_CHANNEL_ID}>.", ephemeral=True
-        )
-        return
-    if not DEBUG_CAPTURE_PAYLOAD:
-        await interaction.response.send_message(
-            "Payload capture is disabled. Set DEBUG_CAPTURE_PAYLOAD=1 and redeploy.",
-            ephemeral=True
-        )
-        return
-    if not _last_raw_payload:
-        await interaction.response.send_message("No payload captured yet.", ephemeral=True)
-        return
-    buf = io.StringIO()
-    json.dump(_last_raw_payload, buf, indent=2)
-    data = buf.getvalue().encode("utf-8")
-    file = discord.File(fp=io.BytesIO(data), filename="payload.json")
-    await interaction.response.send_message(content="Latest payload:", file=file, ephemeral=False)
 
 ORDER_CONFIG_PATH = os.getenv("ORDER_CONFIG_PATH", "order_config.json")
 
@@ -274,11 +234,6 @@ def _signature_for_cosmetics(items: List[dict]) -> str:
     norm.sort(key=lambda d: (d["n"], d["q"] if d["q"] is not None else -1))
     return hashlib.sha256(json.dumps(norm, sort_keys=True).encode()).hexdigest()
 
-def _merchant_signature(items: List[dict]) -> str:
-    norm = [{"n": str(i.get("name","")), "q": i.get("qty")} for i in items]
-    norm.sort(key=lambda x: (x["n"].lower(), x["q"] if x["q"] is not None else -1))
-    return hashlib.sha256(json.dumps(norm, sort_keys=True).encode()).hexdigest()
-
 def _slug(s: str) -> str:
     s = (s or "").strip().lower()
     return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
@@ -331,58 +286,6 @@ async def send_debug(obj):
         await ch.send("Full payload attached:", file=discord.File(fp, filename="payload.json"))
 
 
-
-def _normalize_items(items: List[dict]) -> Dict[str, int]:
-    out: Dict[str, int] = {}
-    for it in items:
-        n = str(it.get("name", "")).strip()
-        q = it.get("qty", 0)
-        try:
-            q = int(q)
-        except Exception:
-            q = 0
-        out[n] = q
-    return out
-
-def _changed_item_names(prev: Dict[str, int], curr: Dict[str, int]) -> set:
-    names = set(prev.keys()) | set(curr.keys())
-    return {n for n in names if prev.get(n, None) != curr.get(n, None)}
-
-def _cancel_debounce(cat: str):
-    st = _single_change_debounce.get(cat)
-    if st:
-        t = st.get("task")
-        if t and not t.done():
-            t.cancel()
-    _single_change_debounce.pop(cat, None)
-
-async def _debounced_send_after(cat: str):
-    try:
-        await asyncio.sleep(SINGLE_ITEM_DEBOUNCE_SEC)
-    except asyncio.CancelledError:
-        return
-    st = _single_change_debounce.get(cat)
-    if not st:
-        return
-    items = st.get("pending_items") or []
-    try:
-        await send_batch_text(cat, items)
-        _last_announced_snapshot[cat] = _normalize_items(items)
-    except Exception as e:
-        print(f"[debounce] send_batch_text({cat}) error: {e}")
-    finally:
-        _cancel_debounce(cat)
-
-def _start_or_reset_debounce(cat: str, items: List[dict]):
-    st = _single_change_debounce.get(cat)
-    if st:
-        t = st.get("task")
-        if t and not t.done():
-            t.cancel()
-    _single_change_debounce[cat] = {
-        "pending_items": items,
-        "task": asyncio.create_task(_debounced_send_after(cat)),
-    }
 
 def parse_stock_payload(raw: dict) -> Tuple[Dict[str, List[dict]], Dict[str, Any]]:
     stock_map: Dict[str, List[dict]] = {}
@@ -563,23 +466,12 @@ async def send_weather_embeds(active_weathers: List[dict]):
         print(f"[warn] no channel for category=weathers (ID={cid})")
         return
     sig = json.dumps([{"n": w.get("raw", w["name"]), "e": w.get("end", 0)} for w in active_weathers], sort_keys=True)
-    global _last_weather_hash, _last_weather_announced_set, _last_weather_msg_time
+    global _last_weather_hash
     h = hashlib.sha256(sig.encode()).hexdigest()
     if _last_weather_hash == h:
         return
     _last_weather_hash = h
-    now = time.time()
     guild = ch.guild if hasattr(ch, "guild") else None
-    current_raws = {w.get("raw", w["name"]) for w in active_weathers}
-    _last_weather_announced_set &= current_raws
-    within_window = (now - _last_weather_msg_time) <= WEATHER_SUPPRESS_WINDOW_SEC if _last_weather_msg_time else False
-    if within_window:
-        filtered = [w for w in active_weathers if w.get("raw", w["name"]) not in _last_weather_announced_set]
-        if not filtered:
-            return
-        to_post = filtered
-    else:
-        to_post = active_weathers
     roles_to_ping: List[discord.Role] = []
     lines: List[str] = []
     remaining = 2000
@@ -593,7 +485,7 @@ async def send_weather_embeds(active_weathers: List[dict]):
         remaining -= need
         return True
 
-    for w in to_post:
+    for w in active_weathers:
         label = w["name"]
         role_to_ping = None
         if ROLE_MENTIONS and guild:
@@ -606,10 +498,11 @@ async def send_weather_embeds(active_weathers: List[dict]):
                 label = role_to_ping.mention
                 roles_to_ping.append(role_to_ping)
         if not add_line(label):
+            lines.append(f"… +{len(active_weathers) - len(lines)} more (see embeds)")
             break
     content = "\n".join(lines) if lines else "**Active Weathers**"
     embeds: List[discord.Embed] = []
-    for w in to_post[:10]:
+    for w in active_weathers[:10]:
         desc = f"{w['name']} — ends <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} — active"
         e = Embed(description=desc, color=_color('weathers'))
         if w.get("icon"):
@@ -618,10 +511,11 @@ async def send_weather_embeds(active_weathers: List[dict]):
             except Exception:
                 pass
         embeds.append(e)
+    overflow = len(active_weathers) - 10
+    if overflow > 0:
+        content = (content + ("\n" if content else "")) + f"… +{overflow} more (icons capped to 10)"
     am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
     await ch.send(content=content, embeds=embeds, allowed_mentions=am)
-    _last_weather_msg_time = now
-    _last_weather_announced_set |= {w.get("raw", w["name"]) for w in to_post}
 
 async def send_update(category: str, data: dict):
     cid = CATEGORY_CHANNELS.get(category, 0)
@@ -638,7 +532,7 @@ async def send_update(category: str, data: dict):
     await ch.send(line)
 
 async def ws_consumer():
-    global _last_merchant_name, _last_merchant_sig, _last_merchant_at
+    global _last_merchant_name
     if not EXTERNAL_WS_URL:
         print("[error] EXTERNAL_WS_URL not set")
         await bot.close()
@@ -673,9 +567,6 @@ async def ws_consumer():
                         if msg.type == WSMsgType.TEXT:
                             try:
                                 raw = json.loads(msg.data)
-                                global _last_raw_payload
-                                if DEBUG_CAPTURE_PAYLOAD:
-                                    _last_raw_payload = raw
                             except json.JSONDecodeError:
                                 print(f"[ws] bad json :: {str(msg.data)[:200]}")
                                 continue
@@ -703,50 +594,22 @@ async def ws_consumer():
                                 merchant_items = stock_map.get("merchant", [])
                                 curr_name = (extras.get("merchant_name") or "").strip() if isinstance(extras, dict) else ""
                                 if merchant_items and curr_name:
-                                    try:
-                                        curr_sig = _merchant_signature(merchant_items)
-                                    except Exception as e:
-                                        print(f"[ws] merchant sig error: {e}")
-                                        curr_sig = None
-                                    now = time.time()
-                                    announce = False
                                     if _last_merchant_name != curr_name:
-                                        announce = True
-                                    else:
-                                        if (_last_merchant_at == 0.0) or (now - _last_merchant_at >= MERCHANT_SUPPRESS_MINUTES * 60):
-                                            if curr_sig and (_last_merchant_sig != curr_sig):
-                                                announce = True
-                                    if announce:
                                         try:
                                             await send_batch_text("merchant", merchant_items, title_hint=curr_name)
-                                            _last_merchant_name = curr_name
-                                            _last_merchant_sig  = curr_sig
-                                            _last_merchant_at   = now
                                         except Exception as e:
                                             print(f"[ws] merchant send error: {e}")
+                                        _last_merchant_name = curr_name
                                     processed_any = True
                                 for cat, items in stock_map.items():
                                     if cat == "merchant":
                                         continue
-                                    if cat not in CATEGORY_CHANNELS or not items:
-                                        continue
-                                    try:
-                                        if cat in ("seeds", "pets", "gears"):
-                                            curr_map = _normalize_items(items)
-                                            prev_map = _last_announced_snapshot.get(cat, {})
-                                            changed = _changed_item_names(prev_map, curr_map)
-                                            if len(changed) == 1:
-                                                _start_or_reset_debounce(cat, items)
-                                            else:
-                                                if _single_change_debounce.get(cat):
-                                                    _cancel_debounce(cat)
-                                                await send_batch_text(cat, items)
-                                                _last_announced_snapshot[cat] = curr_map
-                                        else:
+                                    if cat in CATEGORY_CHANNELS and items:
+                                        try:
                                             await send_batch_text(cat, items)
-                                        processed_any = True
-                                    except Exception as e:
-                                        print(f"[ws] send_batch_text({cat}) error: {e}")
+                                            processed_any = True
+                                        except Exception as e:
+                                            print(f"[ws] send_batch_text({cat}) error: {e}")
                             if isinstance(raw, dict) and isinstance(raw.get("weather"), list):
                                 try:
                                     active_weathers = parse_weather_payload(raw)
@@ -773,11 +636,6 @@ async def ws_consumer():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    try:
-        await tree.sync()
-        print("[slash] commands synced")
-    except Exception as e:
-        print(f"[slash] sync failed: {e}")
     bot.loop.create_task(ws_consumer())
 
 def shutdown(*_):
