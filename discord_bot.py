@@ -19,7 +19,17 @@ _DEBUG_SENT_ONCE = False
 DEBUG_CAPTURE_PAYLOAD = os.getenv("DEBUG_CAPTURE_PAYLOAD", "0") == "1"
 _last_raw_payload: Optional[dict] = None
 _last_effective_payload: Optional[dict] = None
-_last_ws_frame: Optional[dict] = None  
+_state_snapshot: dict = {
+    "seed_stock": [],
+    "gear_stock": [],
+    "egg_stock": [],
+    "cosmetic_stock": [],
+    "eventshop_stock": [],
+    "weather": [],
+    "travelingmerchant_stock": None,
+    "notification": [],
+    "_meta": {"updated_at": 0}
+}
 
 CATEGORY_CHANNELS = {
     "seeds":     int(os.getenv("CHANNEL_SEEDS", "0")),
@@ -197,20 +207,29 @@ async def _resolve_channel(cid: int):
             return None
     return ch
 
-@tree.command(name="payload", description="Download the latest payload that generated a message")
+@tree.command(name="payload", description="Download the latest full payload snapshot (WS schema)")
 async def payload_cmd(interaction: discord.Interaction):
     if DEBUG_CHANNEL_ID and interaction.channel_id != DEBUG_CHANNEL_ID:
         await interaction.response.send_message(f"Please use this command in <#{DEBUG_CHANNEL_ID}>.", ephemeral=True)
         return
-    target = _last_effective_payload or _last_raw_payload
-    if not target:
-        await interaction.response.send_message("No payload captured yet.", ephemeral=True)
+    to_dump = {k: v for k, v in _state_snapshot.items() if not k.startswith("_")}
+    if (
+        not to_dump.get("seed_stock")
+        and not to_dump.get("gear_stock")
+        and not to_dump.get("egg_stock")
+        and not to_dump.get("cosmetic_stock")
+        and not to_dump.get("eventshop_stock")
+        and not to_dump.get("weather")
+        and not to_dump.get("travelingmerchant_stock")
+        and not to_dump.get("notification")
+    ):
+        await interaction.response.send_message("No snapshot captured yet.", ephemeral=True)
         return
     buf = io.StringIO()
-    json.dump(target, buf, indent=2)
+    json.dump(to_dump, buf, indent=2)
     data = buf.getvalue().encode("utf-8")
-    file = discord.File(fp=io.BytesIO(data), filename="payload.json")
-    await interaction.response.send_message(content="Latest payload used:", file=file, ephemeral=False)
+    file = discord.File(fp=io.BytesIO(data), filename="payload.latest.json")
+    await interaction.response.send_message(content="Latest full payload:", file=file, ephemeral=False)
 
 ORDER_CONFIG_PATH = os.getenv("ORDER_CONFIG_PATH", "order_config.json")
 
@@ -297,7 +316,6 @@ async def _debounced_send_after(cat: str):
         return
     items = st.get("pending_items") or []
     try:
-        _mark_effective_payload(_last_ws_frame)
         await send_batch_text(cat, items)
         _last_announced_snapshot[cat] = _normalize_items(items)
     except Exception as e:
@@ -380,6 +398,30 @@ async def send_debug(obj):
 
 
 
+def _deepcopy_json_safe(obj):
+    try:
+        return json.loads(json.dumps(obj))
+    except Exception:
+        return obj
+
+def _update_snapshot_from_raw(raw: dict):
+    touched = False
+    for k, v in raw.items():
+        if isinstance(k, str) and k.endswith("_stock") and isinstance(v, list):
+            _state_snapshot[k] = _deepcopy_json_safe(v)
+            touched = True
+    if isinstance(raw.get("weather"), list):
+        _state_snapshot["weather"] = _deepcopy_json_safe(raw["weather"])
+        touched = True
+    if isinstance(raw.get("notification"), list):
+        _state_snapshot["notification"] = _deepcopy_json_safe(raw["notification"])
+        touched = True
+    if isinstance(raw.get("travelingmerchant_stock"), dict):
+        _state_snapshot["travelingmerchant_stock"] = _deepcopy_json_safe(raw["travelingmerchant_stock"])
+        touched = True
+    if touched:
+        _state_snapshot["_meta"]["updated_at"] = int(time.time())
+
 def parse_stock_payload(raw: dict) -> Tuple[Dict[str, List[dict]], Dict[str, Any]]:
     stock_map: Dict[str, List[dict]] = {}
     extras: Dict[str, Any] = {}
@@ -436,11 +478,6 @@ def parse_weather_payload(raw: dict) -> List[dict]:
         out.append({"name": fixedweather, "raw": str(raw_name), "remaining": remaining, "end": end or 0, "icon": icon,})
     out.sort(key=lambda x: x["name"].lower())
     return out
-
-def _mark_effective_payload(obj: dict | list):
-    if DEBUG_CAPTURE_PAYLOAD:
-        global _last_effective_payload
-        _last_effective_payload = obj
 
 def _fmt_duration(sec: Optional[int]) -> str:
     if sec is None: return "active"
@@ -677,7 +714,11 @@ async def ws_consumer():
                                 global _last_raw_payload
                                 if DEBUG_CAPTURE_PAYLOAD:
                                     _last_raw_payload = raw
-                                    _last_ws_frame = raw
+                                    try:
+                                        if isinstance(raw, dict):
+                                            _update_snapshot_from_raw(raw)
+                                    except Exception as e:
+                                        print(f"[ws] snapshot update error: {e}")
                             except json.JSONDecodeError:
                                 print(f"[ws] bad json :: {str(msg.data)[:200]}")
                                 continue
@@ -720,7 +761,6 @@ async def ws_consumer():
                                             announce = True
                                 if announce:
                                     try:
-                                        _mark_effective_payload(_last_ws_frame)
                                         await send_batch_text("merchant", merchant_items, title_hint=curr_name)
                                         _last_merchant_name = curr_name
                                         _last_merchant_sig  = curr_sig
@@ -743,11 +783,9 @@ async def ws_consumer():
                                             else:
                                                 if _single_change_debounce.get(cat):
                                                     _cancel_debounce(cat)
-                                                _mark_effective_payload(_last_ws_frame)
                                                 await send_batch_text(cat, items)
                                                 _last_announced_snapshot[cat] = curr_map
                                         else:
-                                            _mark_effective_payload(_last_ws_frame)
                                             await send_batch_text(cat, items)
                                         processed_any = True
                                     except Exception as e:
@@ -760,7 +798,6 @@ async def ws_consumer():
                                     active_weathers = []
                                 if active_weathers:
                                     try:
-                                        _mark_effective_payload(_last_ws_frame)
                                         await send_weather_embeds(active_weathers)
                                     except Exception as e:
                                         print(f"[ws] send_weather_embeds error: {e}")
