@@ -507,7 +507,7 @@ def _build_text_lines(category: str, items: List[dict], title_hint: Optional[str
         lines.append(f"… +{len(items)-shown} more")
     return "\n".join(lines)
 
-aasync def send_batch_text(category: str, items: List[dict], title_hint: Optional[str] = None):
+async def send_batch_text(category: str, items: List[dict], title_hint: Optional[str] = None):
     cid = CATEGORY_CHANNELS.get(category, 0)
     ch = await _resolve_channel(cid)
     if not ch:
