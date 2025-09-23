@@ -168,6 +168,9 @@ MERCHANT_SUPPRESS_MINUTES = int(os.getenv("MERCHANT_SUPPRESS_MINUTES", "30"))
 _last_merchant_name: Optional[str] = None
 _last_merchant_sig: Optional[str] = None
 _last_merchant_at: float = 0.0
+SINGLE_ITEM_DEBOUNCE_SEC = int(os.getenv("SINGLE_ITEM_DEBOUNCE_SEC", "5"))
+_last_announced_snapshot: Dict[str, Dict[str, int]] = {"seeds": {}, "pets": {}, "gears": {}}
+_single_change_debounce: Dict[str, Dict[str, Any]] = {}
 
 async def _resolve_channel(cid: int):
     if not cid: return None
@@ -222,12 +225,63 @@ def sort_items(category: str, items: List[dict]) -> List[dict]:
     if not pri:
         return items
     enumerated = list(enumerate(items))
+
     def key(pair):
         idx, it = pair
         name_l = str(it.get("name","")).strip().lower()
         return (pri.get(name_l, 10_000 + idx), idx)
+
     enumerated.sort(key=key)
     return [it for _, it in enumerated]
+
+def _normalize_items(items: List[dict]) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for it in items:
+        n = str(it.get("name", "")).strip()
+        q = it.get("qty", 0)
+        try:
+            q = int(q)
+        except Exception:
+            q = 0
+        out[n] = q
+    return out
+
+def _changed_item_names(prev: Dict[str, int], curr: Dict[str, int]) -> set:
+    names = set(prev.keys()) | set(curr.keys())
+    return {n for n in names if prev.get(n, None) != curr.get(n, None)}
+
+def _cancel_debounce(cat: str):
+    st = _single_change_debounce.get(cat)
+    if st:
+        t = st.get("task")
+        if t and not t.done():
+            t.cancel()
+    _single_change_debounce.pop(cat, None)
+
+async def _debounced_send_after(cat: str):
+    try:
+        await asyncio.sleep(SINGLE_ITEM_DEBOUNCE_SEC)
+    except asyncio.CancelledError:
+        return
+    st = _single_change_debounce.get(cat)
+    if not st:
+        return
+    items = st.get("pending_items") or []
+    try:
+        await send_batch_text(cat, items)
+        _last_announced_snapshot[cat] = _normalize_items(items)
+    except Exception as e:
+        print(f"[debounce] send_batch_text({cat}) error: {e}")
+    finally:
+        _cancel_debounce(cat)
+
+def _start_or_reset_debounce(cat: str, items: List[dict]):
+    st = _single_change_debounce.get(cat)
+    if st:
+        t = st.get("task")
+        if t and not t.done():
+            t.cancel()
+    _single_change_debounce[cat] = {"pending_items": items, "task": asyncio.create_task(_debounced_send_after(cat)),}
 
 def _signature_for_cosmetics(items: List[dict]) -> str:
     norm = []
@@ -628,12 +682,25 @@ async def ws_consumer():
                                 for cat, items in stock_map.items():
                                     if cat == "merchant":
                                         continue
-                                    if cat in CATEGORY_CHANNELS and items:
-                                        try:
+                                    if cat not in CATEGORY_CHANNELS or not items:
+                                        continue
+                                    try:
+                                        if cat in ("seeds", "pets", "gears"):
+                                            curr_map = _normalize_items(items)
+                                            prev_map = _last_announced_snapshot.get(cat, {})
+                                            changed = _changed_item_names(prev_map, curr_map)
+                                            if len(changed) == 1:
+                                                _start_or_reset_debounce(cat, items)
+                                            else:
+                                                if _single_change_debounce.get(cat):
+                                                    _cancel_debounce(cat)
+                                                await send_batch_text(cat, items)
+                                                _last_announced_snapshot[cat] = curr_map
+                                        else:
                                             await send_batch_text(cat, items)
-                                            processed_any = True
-                                        except Exception as e:
-                                            print(f"[ws] send_batch_text({cat}) error: {e}")
+                                        processed_any = True
+                                    except Exception as e:
+                                        print(f"[ws] send_batch_text({cat}) error: {e}")
                             if isinstance(raw, dict) and isinstance(raw.get("weather"), list):
                                 try:
                                     active_weathers = parse_weather_payload(raw)
