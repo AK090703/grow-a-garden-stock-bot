@@ -30,6 +30,13 @@ _state_snapshot: dict = {
     "notification": [],
     "_meta": {"updated_at": 0}
 }
+_weather_index: Dict[str, dict] = {}
+
+def _weather_key(w: dict) -> Optional[str]:
+    if not isinstance(w, dict):
+        return None
+    k = (w.get("weather_name") or w.get("weather_id") or "").strip()
+    return k or None
 
 CATEGORY_CHANNELS = {
     "seeds":     int(os.getenv("CHANNEL_SEEDS", "0")),
@@ -183,8 +190,6 @@ _last_weather_hash: Optional[str] = None
 _last_presence: Dict[str, bool] = {"merchant": False}
 _last_merchant_name: Optional[str] = None
 _last_cosmetics_sig: Optional[str] = None
-_last_cosmetics_at: float = 0.0
-COSMETICS_COOLDOWN_MINUTES = int(os.getenv("COSMETICS_COOLDOWN_MINUTES", "240"))
 MERCHANT_SUPPRESS_MINUTES = int(os.getenv("MERCHANT_SUPPRESS_MINUTES", "30"))
 _last_merchant_name: Optional[str] = None
 _last_merchant_sig: Optional[str] = None
@@ -192,9 +197,8 @@ _last_merchant_at: float = 0.0
 SINGLE_ITEM_DEBOUNCE_SEC = int(os.getenv("SINGLE_ITEM_DEBOUNCE_SEC", "5"))
 _last_announced_snapshot: Dict[str, Dict[str, int]] = {"seeds": {}, "pets": {}, "gears": {}}
 _single_change_debounce: Dict[str, Dict[str, Any]] = {}
-WEATHER_SUPPRESS_WINDOW_SEC = int(os.getenv("WEATHER_SUPPRESS_WINDOW_SEC", "10"))
-_last_weather_announced_set: set[str] = set()
-_last_weather_msg_time: float = 0.0
+_weather_suppress_until: Dict[str, int] = {}
+DEFAULT_WEATHER_SUPPRESS_FALLBACK = int(os.getenv("WEATHER_SUPPRESS_FALLBACK_SEC", "180"))
 
 async def _resolve_channel(cid: int):
     if not cid: return None
@@ -411,8 +415,16 @@ def _update_snapshot_from_raw(raw: dict):
             _state_snapshot[k] = _deepcopy_json_safe(v)
             touched = True
     if isinstance(raw.get("weather"), list):
-        _state_snapshot["weather"] = _deepcopy_json_safe(raw["weather"])
+        for w in raw["weather"]:
+            if not isinstance(w, dict):
+                continue
+            key = _weather_key(w)
+            if not key:
+                continue
+            _weather_index[key] = _deepcopy_json_safe(w)
+        _state_snapshot["weather"] = list(_weather_index.values())
         touched = True
+
     if isinstance(raw.get("notification"), list):
         _state_snapshot["notification"] = _deepcopy_json_safe(raw["notification"])
         touched = True
@@ -521,21 +533,14 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
     if category in ("seeds", "pets", "gears"):
         items = sort_items(category, items)
     if category == "cosmetics":
-        global _last_cosmetics_sig, _last_cosmetics_at
+        global _last_cosmetics_sig
         sig = _signature_for_cosmetics(items)
-        now = time.time()
-        if _last_cosmetics_sig is None:
-            _last_cosmetics_sig = sig
-            return
         if _last_cosmetics_sig == sig:
-            return
-        if (_last_cosmetics_at > 0) and (now - _last_cosmetics_at < COSMETICS_COOLDOWN_MINUTES * 60):
-            return
-        _last_cosmetics_sig = sig
-        _last_cosmetics_at = now
+            return None
         content = _build_text_lines(category, items, title_hint=title_hint)
-        await ch.send(content)
-        return
+        msg = await ch.send(content)
+        _last_cosmetics_sig = sig
+        return msg
     batch_signature = json.dumps([{"n": it.get("name"), "q": it.get("qty")} for it in items], sort_keys=False)
     if title_hint:
         batch_signature += f"|{title_hint}"
@@ -605,24 +610,26 @@ async def send_weather_embeds(active_weathers: List[dict]):
     if not ch:
         print(f"[warn] no channel for category=weathers (ID={cid})")
         return
-    sig = json.dumps([{"n": w.get("raw", w["name"]), "e": w.get("end", 0)} for w in active_weathers], sort_keys=True)
-    global _last_weather_hash, _last_weather_announced_set, _last_weather_msg_time
+    now = int(time.time())
+    guild = ch.guild if hasattr(ch, "guild") else None
+    current_raws = {w.get("raw", w["name"]) for w in active_weathers}
+    for k in list(_weather_suppress_until.keys()):
+        if k not in current_raws and _weather_suppress_until[k] <= now:
+            _weather_suppress_until.pop(k, None)
+    to_post: List[dict] = []
+    for w in active_weathers:
+        raw_id = w.get("raw", w["name"])
+        until = _weather_suppress_until.get(raw_id, 0)
+        if now >= int(until):
+            to_post.append(w)
+    if not to_post:
+        return
+    sig = json.dumps([{"n": w.get("raw", w["name"]), "e": w.get("end", 0)} for w in to_post], sort_keys=True)
+    global _last_weather_hash
     h = hashlib.sha256(sig.encode()).hexdigest()
     if _last_weather_hash == h:
         return
     _last_weather_hash = h
-    now = time.time()
-    guild = ch.guild if hasattr(ch, "guild") else None
-    current_raws = {w.get("raw", w["name"]) for w in active_weathers}
-    _last_weather_announced_set &= current_raws
-    within_window = (now - _last_weather_msg_time) <= WEATHER_SUPPRESS_WINDOW_SEC if _last_weather_msg_time else False
-    if within_window:
-        filtered = [w for w in active_weathers if w.get("raw", w["name"]) not in _last_weather_announced_set]
-        if not filtered:
-            return
-        to_post = filtered
-    else:
-        to_post = active_weathers
     roles_to_ping: List[discord.Role] = []
     lines: List[str] = []
     remaining = 2000
@@ -663,8 +670,15 @@ async def send_weather_embeds(active_weathers: List[dict]):
         embeds.append(e)
     am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
     await ch.send(content=content, embeds=embeds, allowed_mentions=am)
-    _last_weather_msg_time = now
-    _last_weather_announced_set |= {w.get("raw", w["name"]) for w in to_post}
+    for w in to_post:
+        raw_id = w.get("raw", w["name"])
+        end_ts = None
+        try:
+            end_ts = int(w.get("end") or 0)
+        except Exception:
+            end_ts = 0
+        suppress_until = end_ts if end_ts and end_ts > now else now + DEFAULT_WEATHER_SUPPRESS_FALLBACK
+        _weather_suppress_until[raw_id] = suppress_until
 
 async def send_update(category: str, data: dict):
     cid = CATEGORY_CHANNELS.get(category, 0)
