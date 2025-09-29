@@ -117,7 +117,9 @@ ADMIN_ABUSE_WEATHERS = {
     "Sunset",
     "GiantSwordPull",
     "JandelUFO",
-    "Tsunami"
+    "Tsunami",
+    "MidasRain",
+    "SolarFlare"
 }
 ADMIN_ABUSE_ROLE_NAME = "Admin Abuse"
 SPECIAL_WEATHER_NAMES = {
@@ -165,7 +167,9 @@ SPECIAL_WEATHER_NAMES = {
     "BeeNado": "Beenado",
     "GiantSwordPull": "Giant Sword Pull",
     "IceKing": "Ice King",
-    "JandelUFO": "Jandel UFO"
+    "JandelUFO": "Jandel UFO",
+    "MidasRain": "Midas Rain",
+    "SolarFlare": "Solar Flare"
 }
 
 def repair_weather_name(raw: str) -> str:
