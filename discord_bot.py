@@ -713,9 +713,10 @@ async def send_update(category: str, data: dict):
 async def ws_consumer():
     global _last_merchant_name, _last_merchant_sig, _last_merchant_at
     if not EXTERNAL_WS_URL:
-        print("[error] EXTERNAL_WS_URL not set")
-        await bot.close()
-        return
+        print("[error] EXTERNAL_WS_URL not set; will retry in 30s")
+        while not bot.is_closed() and not os.getenv("EXTERNAL_WS_URL"):
+            await asyncio.sleep(30)
+        globals()["EXTERNAL_WS_URL"] = os.getenv("EXTERNAL_WS_URL")
     headers = {}
     if WS_HEADERS_JSON.strip():
         try:
@@ -886,7 +887,19 @@ async def run_http_and_bot():
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     print(f"[http] listening on 0.0.0.0:{port}")
-    await bot.start(DISCORD_TOKEN)
+    backoff = 5
+    while True:
+        try:
+            print("[bot] starting…")
+            await bot.start(DISCORD_TOKEN)
+        except Exception as e:
+            print(f"[bot] crashed: {e}; restarting in {backoff}s")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+        else:
+            print("[bot] exited; restarting in 5s")
+            await asyncio.sleep(5)
+            backoff = 5
 
 def main():
     if not DISCORD_TOKEN:
