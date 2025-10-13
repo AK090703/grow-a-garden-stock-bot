@@ -366,9 +366,13 @@ def _merchant_signature(items: List[dict]) -> str:
     norm.sort(key=lambda x: (x["n"].lower(), x["q"] if x["q"] is not None else -1))
     return hashlib.sha256(json.dumps(norm, sort_keys=True).encode()).hexdigest()
 
-def _slug(s: str) -> str:
-    s = (s or "").strip().lower()
-    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+async def _build_guild_role_cache(guild: discord.Guild):
+    cache = {}
+    for role in guild.roles:
+        cache[role.id] = role
+    _ROLE_CACHE[guild.id] = cache
+    print(f"[cache] Updated role cache for guild: {guild.name}")
+    return cache
 
 def _role_candidates(name: str, category: str) -> list[str]:
     pref = {
@@ -387,21 +391,21 @@ def _role_candidates(name: str, category: str) -> list[str]:
         f"{category}: {clean}",
     ] if c]
 
-def _build_guild_role_cache(guild: discord.Guild) -> Dict[str, discord.Role]:
-    cache: Dict[str, discord.Role] = {}
-    for r in guild.roles:
-        cache[_slug(r.name)] = r
+async def _build_guild_role_cache(guild: discord.Guild):
+    cache = {}
+    for role in guild.roles:
+        cache[role.id] = role
     _ROLE_CACHE[guild.id] = cache
+    print(f"[cache] Updated role cache for guild: {guild.name}")
     return cache
 
-def _find_role(guild: discord.Guild, display_name: str, category: str) -> Optional[discord.Role]:
-    if not guild or not display_name:
-        return None
-    cache = _ROLE_CACHE.get(guild.id) or _build_guild_role_cache(guild)
-    for cand in _role_candidates(display_name, category):
-        r = cache.get(_slug(cand))
-        if r:
-            return r
+async def _find_role(guild: discord.Guild, display_name: str, category: str) -> Optional[discord.Role]:
+    cache = _ROLE_CACHE.get(guild.id)
+    if not cache:
+        cache = await _build_guild_role_cache(guild)
+    for role in guild.roles:
+        if role.name.lower() == display_name.lower():
+            return role
     return None
 
 async def send_debug(obj):
@@ -856,6 +860,8 @@ async def ws_consumer():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    for guild in bot.guilds:
+        await _build_guild_role_cache(guild)
     try:
         await tree.sync()
         print("[slash] commands synced")
