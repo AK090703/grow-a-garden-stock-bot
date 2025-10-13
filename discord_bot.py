@@ -402,9 +402,12 @@ def _find_role(guild: discord.Guild, display_name: str, category: str) -> Option
         r = cache.get(_slug(cand))
         if r:
             return r
+    cache = _build_guild_role_cache(guild)
+    for cand in _role_candidates(display_name, category):
+        r = cache.get(_slug(cand))
+        if r:
+            return r
     return None
-
-
 
 async def send_debug(obj):
     if not DEBUG_RAW or not DEBUG_CHANNEL_ID: return
@@ -416,8 +419,6 @@ async def send_debug(obj):
     else:
         fp = io.BytesIO(s.encode("utf-8"))
         await ch.send("Full payload attached:", file=discord.File(fp, filename="payload.json"))
-
-
 
 def _deepcopy_json_safe(obj):
     try:
@@ -761,7 +762,6 @@ async def ws_consumer():
                             except Exception as e:
                                 print(f"[ws] unexpected json error: {e}")
                                 continue
-
                             global _DEBUG_SENT_ONCE
                             if DEBUG_RAW and not _DEBUG_SENT_ONCE:
                                 try:
@@ -769,7 +769,6 @@ async def ws_consumer():
                                     _DEBUG_SENT_ONCE = True
                                 except Exception as e:
                                     print(f"[debug] send_debug failed: {e}")
-
                             processed_any = False
                             if isinstance(raw, dict) and (any(isinstance(v, list) and isinstance(k, str) and k.endswith("_stock") for k, v in raw.items())
                                 or isinstance(raw.get("travelingmerchant_stock"), dict)):
