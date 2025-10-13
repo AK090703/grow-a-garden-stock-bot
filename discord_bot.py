@@ -571,7 +571,7 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         header_title = "Merchant stock"
         header_suffix = ""
         if ROLE_MENTIONS and guild and title_hint:
-            r = _find_role(guild, title_hint, "merchant")
+            r = await _find_role(guild, title_hint, "merchant")
             if r and r not in role_mentions:
                 header_suffix = f" — {r.mention}"
                 roles_to_ping.append(r)
@@ -590,7 +590,7 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         qty  = it.get("qty")
         label = name
         if ROLE_MENTIONS and guild and category in ("seeds", "pets", "gears"):
-            r = _find_role(guild, name, category)
+            r = await _find_role(guild, name, category)
             if r and r not in role_mentions:
                 label = r.mention
                 roles_to_ping.append(r)
@@ -669,9 +669,9 @@ async def send_weather_embeds(active_weathers: List[dict]):
         if ROLE_MENTIONS and guild:
             raw_id = w.get("raw", w["name"])
             if raw_id in ADMIN_ABUSE_WEATHERS:
-                role_to_ping = _find_role(guild, ADMIN_ABUSE_ROLE_NAME, "weathers")
+                role_to_ping = await _find_role(guild, ADMIN_ABUSE_ROLE_NAME, "weathers")
             else:
-                role_to_ping = _find_role(guild, w["name"], "weathers")
+                role_to_ping = await _find_role(guild, w["name"], "weathers")
             if role_to_ping:
                 label = role_to_ping.mention
                 roles_to_ping.append(role_to_ping)
