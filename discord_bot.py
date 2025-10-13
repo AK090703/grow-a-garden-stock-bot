@@ -366,13 +366,9 @@ def _merchant_signature(items: List[dict]) -> str:
     norm.sort(key=lambda x: (x["n"].lower(), x["q"] if x["q"] is not None else -1))
     return hashlib.sha256(json.dumps(norm, sort_keys=True).encode()).hexdigest()
 
-async def _build_guild_role_cache(guild: discord.Guild):
-    cache = {}
-    for role in guild.roles:
-        cache[role.id] = role
-    _ROLE_CACHE[guild.id] = cache
-    print(f"[cache] Updated role cache for guild: {guild.name}")
-    return cache
+def _slug(s: str) -> str:
+    s = (s or "").strip().lower()
+    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
 
 def _role_candidates(name: str, category: str) -> list[str]:
     pref = {
@@ -391,22 +387,24 @@ def _role_candidates(name: str, category: str) -> list[str]:
         f"{category}: {clean}",
     ] if c]
 
-async def _build_guild_role_cache(guild: discord.Guild):
-    cache = {}
-    for role in guild.roles:
-        cache[role.id] = role
+def _build_guild_role_cache(guild: discord.Guild) -> Dict[str, discord.Role]:
+    cache: Dict[str, discord.Role] = {}
+    for r in guild.roles:
+        cache[_slug(r.name)] = r
     _ROLE_CACHE[guild.id] = cache
-    print(f"[cache] Updated role cache for guild: {guild.name}")
     return cache
 
-async def _find_role(guild: discord.Guild, display_name: str, category: str) -> Optional[discord.Role]:
-    cache = _ROLE_CACHE.get(guild.id)
-    if not cache:
-        cache = await _build_guild_role_cache(guild)
-    for role in guild.roles:
-        if role.name.lower() == display_name.lower():
-            return role
+def _find_role(guild: discord.Guild, display_name: str, category: str) -> Optional[discord.Role]:
+    if not guild or not display_name:
+        return None
+    cache = _ROLE_CACHE.get(guild.id) or _build_guild_role_cache(guild)
+    for cand in _role_candidates(display_name, category):
+        r = cache.get(_slug(cand))
+        if r:
+            return r
     return None
+
+
 
 async def send_debug(obj):
     if not DEBUG_RAW or not DEBUG_CHANNEL_ID: return
@@ -418,6 +416,8 @@ async def send_debug(obj):
     else:
         fp = io.BytesIO(s.encode("utf-8"))
         await ch.send("Full payload attached:", file=discord.File(fp, filename="payload.json"))
+
+
 
 def _deepcopy_json_safe(obj):
     try:
@@ -566,16 +566,14 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         return
     _last_batch_hash[category] = h
     roles_to_ping: List[discord.Role] = []
-    role_mentions = set()
     if category == "merchant":
         header_title = "Merchant stock"
         header_suffix = ""
         if ROLE_MENTIONS and guild and title_hint:
-            r = await _find_role(guild, title_hint, "merchant")
-            if r and r not in role_mentions:
+            r = _find_role(guild, title_hint, "merchant")
+            if r:
                 header_suffix = f" — {r.mention}"
                 roles_to_ping.append(r)
-                role_mentions.add(r)
             elif title_hint:
                 header_suffix = f" — {title_hint}"
         elif title_hint:
@@ -590,11 +588,10 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         qty  = it.get("qty")
         label = name
         if ROLE_MENTIONS and guild and category in ("seeds", "pets", "gears"):
-            r = await _find_role(guild, name, category)
-            if r and r not in role_mentions:
+            r = _find_role(guild, name, category)
+            if r:
                 label = r.mention
                 roles_to_ping.append(r)
-                role_mentions.add(r)
         line = f"• {label} — **{qty}**"
         if len(line) + 1 <= remaining_chars:
             lines.append(line)
@@ -603,7 +600,7 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
             lines.append(f"… +{len(items) - (len(lines)-1)} more")
             break
     content = "\n".join(lines)
-    am = AllowedMentions(everyone=False, users=False, roles=[role.id for role in roles_to_ping])
+    am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
     await ch.send(content, allowed_mentions=am)
 
 async def send_absent_notice(category: str, title_hint: Optional[str] = None):
@@ -669,9 +666,9 @@ async def send_weather_embeds(active_weathers: List[dict]):
         if ROLE_MENTIONS and guild:
             raw_id = w.get("raw", w["name"])
             if raw_id in ADMIN_ABUSE_WEATHERS:
-                role_to_ping = await _find_role(guild, ADMIN_ABUSE_ROLE_NAME, "weathers")
+                role_to_ping = _find_role(guild, ADMIN_ABUSE_ROLE_NAME, "weathers")
             else:
-                role_to_ping = await _find_role(guild, w["name"], "weathers")
+                role_to_ping = _find_role(guild, w["name"], "weathers")
             if role_to_ping:
                 label = role_to_ping.mention
                 roles_to_ping.append(role_to_ping)
@@ -860,8 +857,6 @@ async def ws_consumer():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    for guild in bot.guilds:
-        await _build_guild_role_cache(guild)
     try:
         await tree.sync()
         print("[slash] commands synced")
