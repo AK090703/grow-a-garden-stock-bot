@@ -181,7 +181,8 @@ SPECIAL_WEATHER_NAMES = {
     "BeeStorm": "Bee Storm",
     "SheckleRain": "Sheckle Rain",
     "SeedRain": "Seed Rain",
-    "StrobeParty": "Strobe Party"
+    "StrobeParty": "Strobe Party",
+    "HalloweenNight": "Halloween Night"
 }
 
 def repair_weather_name(raw: str) -> str:
