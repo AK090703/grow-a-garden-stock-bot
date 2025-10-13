@@ -567,9 +567,10 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         return
     _last_batch_hash[category] = h
     roles_to_ping: List[discord.Role] = []
+    header_title = f"{category.capitalize()} stock"
+    header_suffix = ""
     if category == "merchant":
         header_title = "Merchant stock"
-        header_suffix = ""
         if ROLE_MENTIONS and guild and title_hint:
             r = _find_role(guild, title_hint, "merchant")
             if r:
@@ -577,16 +578,17 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
                 roles_to_ping.append(r)
             elif title_hint:
                 header_suffix = f" — {title_hint}"
-        elif title_hint:
-            header_suffix = f" — {title_hint}"
-        header = f"**{header_title}{header_suffix} ({len(items)} item{'s' if len(items)!=1 else ''})**"
+        else:
+            if title_hint:
+                header_suffix = f" — {title_hint}"
+        header = f"**{header_title}{header_suffix} ({len(items)} item{'s' if len(items) != 1 else ''})**"
     else:
-        header = f"**{category.capitalize()} stock ({len(items)} item{'s' if len(items)!=1 else ''})**"
+        header = f"**{category.capitalize()} stock ({len(items)} item{'s' if len(items) != 1 else ''})**"
     lines = [header]
     remaining_chars = 2000 - len(header) - 1
     for it in items:
         name = str(it.get("name", "(unknown)"))
-        qty  = it.get("qty")
+        qty = it.get("qty")
         label = name
         if ROLE_MENTIONS and guild and category in ("seeds", "pets", "gears"):
             r = _find_role(guild, name, category)
