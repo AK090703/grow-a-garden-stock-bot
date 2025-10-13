@@ -404,8 +404,6 @@ def _find_role(guild: discord.Guild, display_name: str, category: str) -> Option
             return r
     return None
 
-
-
 async def send_debug(obj):
     if not DEBUG_RAW or not DEBUG_CHANNEL_ID: return
     ch = await _resolve_channel(DEBUG_CHANNEL_ID)
@@ -416,8 +414,6 @@ async def send_debug(obj):
     else:
         fp = io.BytesIO(s.encode("utf-8"))
         await ch.send("Full payload attached:", file=discord.File(fp, filename="payload.json"))
-
-
 
 def _deepcopy_json_safe(obj):
     try:
@@ -566,14 +562,16 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         return
     _last_batch_hash[category] = h
     roles_to_ping: List[discord.Role] = []
+    role_mentions = set()
     if category == "merchant":
         header_title = "Merchant stock"
         header_suffix = ""
         if ROLE_MENTIONS and guild and title_hint:
             r = _find_role(guild, title_hint, "merchant")
-            if r:
+            if r and r not in role_mentions:
                 header_suffix = f" — {r.mention}"
                 roles_to_ping.append(r)
+                role_mentions.add(r)
             elif title_hint:
                 header_suffix = f" — {title_hint}"
         elif title_hint:
@@ -589,9 +587,10 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         label = name
         if ROLE_MENTIONS and guild and category in ("seeds", "pets", "gears"):
             r = _find_role(guild, name, category)
-            if r:
+            if r and r not in role_mentions:
                 label = r.mention
                 roles_to_ping.append(r)
+                role_mentions.add(r)
         line = f"• {label} — **{qty}**"
         if len(line) + 1 <= remaining_chars:
             lines.append(line)
@@ -600,7 +599,7 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
             lines.append(f"… +{len(items) - (len(lines)-1)} more")
             break
     content = "\n".join(lines)
-    am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
+    am = AllowedMentions(everyone=False, users=False, roles=[role.id for role in roles_to_ping])
     await ch.send(content, allowed_mentions=am)
 
 async def send_absent_notice(category: str, title_hint: Optional[str] = None):
