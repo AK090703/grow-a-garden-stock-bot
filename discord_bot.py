@@ -398,10 +398,12 @@ def _find_role(guild: discord.Guild, display_name: str, category: str) -> Option
     if not guild or not display_name:
         return None
     cache = _ROLE_CACHE.get(guild.id) or _build_guild_role_cache(guild)
+
     for cand in _role_candidates(display_name, category):
         r = cache.get(_slug(cand))
         if r:
             return r
+    print(f"[role] Refreshing cache for {display_name}")
     cache = _build_guild_role_cache(guild)
     for cand in _role_candidates(display_name, category):
         r = cache.get(_slug(cand))
@@ -520,7 +522,7 @@ def _fmt_duration(sec: Optional[int]) -> str:
 def _build_text_lines(category: str, items: List[dict], title_hint: Optional[str] = None) -> str:
     title = f"{category.capitalize()} stock"
     if title_hint:
-        title += f" — {title_hint}"
+        title += f" â€” {title_hint}"
     header = f"**{title} ({len(items)} item{'s' if len(items)!=1 else ''})**"
     lines = [header]
     remaining_chars = 2000 - len(header) - 1
@@ -528,7 +530,7 @@ def _build_text_lines(category: str, items: List[dict], title_hint: Optional[str
     for it in items:
         name = str(it.get("name", "(unknown)"))
         qty  = it.get("qty")
-        line = f"• {name} — **{qty}**"
+        line = f"â€¢ {name} â€” **{qty}**"
         if len(line) + 1 <= remaining_chars:
             lines.append(line)
             remaining_chars -= (len(line) + 1)
@@ -536,7 +538,7 @@ def _build_text_lines(category: str, items: List[dict], title_hint: Optional[str
         else:
             break
     if shown < len(items):
-        lines.append(f"… +{len(items)-shown} more")
+        lines.append(f"â€¦ +{len(items)-shown} more")
     return "\n".join(lines)
 
 async def send_batch_text(category: str, items: List[dict], title_hint: Optional[str] = None):
@@ -567,40 +569,38 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         return
     _last_batch_hash[category] = h
     roles_to_ping: List[discord.Role] = []
-    header_title = f"{category.capitalize()} stock"
-    header_suffix = ""
     if category == "merchant":
         header_title = "Merchant stock"
+        header_suffix = ""
         if ROLE_MENTIONS and guild and title_hint:
             r = _find_role(guild, title_hint, "merchant")
             if r:
-                header_suffix = f" — {r.mention}"
+                header_suffix = f" â€” {r.mention}"
                 roles_to_ping.append(r)
             elif title_hint:
-                header_suffix = f" — {title_hint}"
-        else:
-            if title_hint:
-                header_suffix = f" — {title_hint}"
-        header = f"**{header_title}{header_suffix} ({len(items)} item{'s' if len(items) != 1 else ''})**"
+                header_suffix = f" â€” {title_hint}"
+        elif title_hint:
+            header_suffix = f" â€” {title_hint}"
+        header = f"**{header_title}{header_suffix} ({len(items)} item{'s' if len(items)!=1 else ''})**"
     else:
-        header = f"**{category.capitalize()} stock ({len(items)} item{'s' if len(items) != 1 else ''})**"
+        header = f"**{category.capitalize()} stock ({len(items)} item{'s' if len(items)!=1 else ''})**"
     lines = [header]
     remaining_chars = 2000 - len(header) - 1
     for it in items:
         name = str(it.get("name", "(unknown)"))
-        qty = it.get("qty")
+        qty  = it.get("qty")
         label = name
         if ROLE_MENTIONS and guild and category in ("seeds", "pets", "gears"):
             r = _find_role(guild, name, category)
             if r:
                 label = r.mention
                 roles_to_ping.append(r)
-        line = f"• {label} — **{qty}**"
+        line = f"â€¢ {label} â€” **{qty}**"
         if len(line) + 1 <= remaining_chars:
             lines.append(line)
             remaining_chars -= (len(line) + 1)
         else:
-            lines.append(f"… +{len(items) - (len(lines)-1)} more")
+            lines.append(f"â€¦ +{len(items) - (len(lines)-1)} more")
             break
     content = "\n".join(lines)
     am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
@@ -613,13 +613,13 @@ async def send_absent_notice(category: str, title_hint: Optional[str] = None):
         print(f"[warn] no channel for category={category} (ID={cid})")
         return
     if category == "merchant":
-        msg = "**Traveling Merchant** — none right now."
+        msg = "**Traveling Merchant** â€” none right now."
         if title_hint:
-            msg = f"**Traveling Merchant** — none right now (last: {title_hint})."
+            msg = f"**Traveling Merchant** â€” none right now (last: {title_hint})."
     elif category == "weathers":
-        msg = "**Active Weathers** — none."
+        msg = "**Active Weathers** â€” none."
     else:
-        msg = f"**{category.capitalize()}** — no items."
+        msg = f"**{category.capitalize()}** â€” no items."
     await ch.send(msg)
 
 async def send_weather_embeds(active_weathers: List[dict]):
@@ -680,7 +680,7 @@ async def send_weather_embeds(active_weathers: List[dict]):
     content = "\n".join(lines) if lines else "**Active Weathers**"
     embeds: List[discord.Embed] = []
     for w in to_post[:10]:
-        desc = f"{w['name']} — ends <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} — active"
+        desc = f"{w['name']} â€” ends <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} â€” active"
         e = Embed(description=desc, color=_color('weathers'))
         if w.get("icon"):
             try:
@@ -711,7 +711,7 @@ async def send_update(category: str, data: dict):
     if _last_item_hash.get(key) == h:
         return
     _last_item_hash[key] = h
-    line = f"**{category.capitalize()} update:** {data.get('item','(unknown)')} — **{data.get('stock','?')}**"
+    line = f"**{category.capitalize()} update:** {data.get('item','(unknown)')} â€” **{data.get('stock','?')}**"
     await ch.send(line)
 
 async def ws_consumer():
@@ -899,7 +899,7 @@ async def run_http_and_bot():
     backoff = 5
     while True:
         try:
-            print("[bot] starting…")
+            print("[bot] startingâ€¦")
             await bot.start(DISCORD_TOKEN)
         except Exception as e:
             print(f"[bot] crashed: {e}; restarting in {backoff}s")
