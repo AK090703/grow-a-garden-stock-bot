@@ -600,7 +600,7 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
             lines.append(f"… +{len(items) - (len(lines)-1)} more")
             break
     content = "\n".join(lines)
-    am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
+    am = AllowedMentions(everyone=False, users=False, roles=[role.id for role in roles_to_ping])
     await ch.send(content, allowed_mentions=am)
 
 async def send_absent_notice(category: str, title_hint: Optional[str] = None):
