@@ -398,18 +398,13 @@ def _find_role(guild: discord.Guild, display_name: str, category: str) -> Option
     if not guild or not display_name:
         return None
     cache = _ROLE_CACHE.get(guild.id) or _build_guild_role_cache(guild)
-
-    for cand in _role_candidates(display_name, category):
-        r = cache.get(_slug(cand))
-        if r:
-            return r
-    print(f"[role] Refreshing cache for {display_name}")
-    cache = _build_guild_role_cache(guild)
     for cand in _role_candidates(display_name, category):
         r = cache.get(_slug(cand))
         if r:
             return r
     return None
+
+
 
 async def send_debug(obj):
     if not DEBUG_RAW or not DEBUG_CHANNEL_ID: return
@@ -421,6 +416,8 @@ async def send_debug(obj):
     else:
         fp = io.BytesIO(s.encode("utf-8"))
         await ch.send("Full payload attached:", file=discord.File(fp, filename="payload.json"))
+
+
 
 def _deepcopy_json_safe(obj):
     try:
@@ -522,7 +519,7 @@ def _fmt_duration(sec: Optional[int]) -> str:
 def _build_text_lines(category: str, items: List[dict], title_hint: Optional[str] = None) -> str:
     title = f"{category.capitalize()} stock"
     if title_hint:
-        title += f" â€” {title_hint}"
+        title += f" — {title_hint}"
     header = f"**{title} ({len(items)} item{'s' if len(items)!=1 else ''})**"
     lines = [header]
     remaining_chars = 2000 - len(header) - 1
@@ -530,7 +527,7 @@ def _build_text_lines(category: str, items: List[dict], title_hint: Optional[str
     for it in items:
         name = str(it.get("name", "(unknown)"))
         qty  = it.get("qty")
-        line = f"â€¢ {name} â€” **{qty}**"
+        line = f"• {name} — **{qty}**"
         if len(line) + 1 <= remaining_chars:
             lines.append(line)
             remaining_chars -= (len(line) + 1)
@@ -538,7 +535,7 @@ def _build_text_lines(category: str, items: List[dict], title_hint: Optional[str
         else:
             break
     if shown < len(items):
-        lines.append(f"â€¦ +{len(items)-shown} more")
+        lines.append(f"… +{len(items)-shown} more")
     return "\n".join(lines)
 
 async def send_batch_text(category: str, items: List[dict], title_hint: Optional[str] = None):
@@ -575,12 +572,12 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         if ROLE_MENTIONS and guild and title_hint:
             r = _find_role(guild, title_hint, "merchant")
             if r:
-                header_suffix = f" â€” {r.mention}"
+                header_suffix = f" — {r.mention}"
                 roles_to_ping.append(r)
             elif title_hint:
-                header_suffix = f" â€” {title_hint}"
+                header_suffix = f" — {title_hint}"
         elif title_hint:
-            header_suffix = f" â€” {title_hint}"
+            header_suffix = f" — {title_hint}"
         header = f"**{header_title}{header_suffix} ({len(items)} item{'s' if len(items)!=1 else ''})**"
     else:
         header = f"**{category.capitalize()} stock ({len(items)} item{'s' if len(items)!=1 else ''})**"
@@ -595,12 +592,12 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
             if r:
                 label = r.mention
                 roles_to_ping.append(r)
-        line = f"â€¢ {label} â€” **{qty}**"
+        line = f"• {label} — **{qty}**"
         if len(line) + 1 <= remaining_chars:
             lines.append(line)
             remaining_chars -= (len(line) + 1)
         else:
-            lines.append(f"â€¦ +{len(items) - (len(lines)-1)} more")
+            lines.append(f"… +{len(items) - (len(lines)-1)} more")
             break
     content = "\n".join(lines)
     am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
@@ -613,13 +610,13 @@ async def send_absent_notice(category: str, title_hint: Optional[str] = None):
         print(f"[warn] no channel for category={category} (ID={cid})")
         return
     if category == "merchant":
-        msg = "**Traveling Merchant** â€” none right now."
+        msg = "**Traveling Merchant** — none right now."
         if title_hint:
-            msg = f"**Traveling Merchant** â€” none right now (last: {title_hint})."
+            msg = f"**Traveling Merchant** — none right now (last: {title_hint})."
     elif category == "weathers":
-        msg = "**Active Weathers** â€” none."
+        msg = "**Active Weathers** — none."
     else:
-        msg = f"**{category.capitalize()}** â€” no items."
+        msg = f"**{category.capitalize()}** — no items."
     await ch.send(msg)
 
 async def send_weather_embeds(active_weathers: List[dict]):
@@ -680,7 +677,7 @@ async def send_weather_embeds(active_weathers: List[dict]):
     content = "\n".join(lines) if lines else "**Active Weathers**"
     embeds: List[discord.Embed] = []
     for w in to_post[:10]:
-        desc = f"{w['name']} â€” ends <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} â€” active"
+        desc = f"{w['name']} — ends <t:{int(w['end'])}:R>" if w.get("end") else f"{w['name']} — active"
         e = Embed(description=desc, color=_color('weathers'))
         if w.get("icon"):
             try:
@@ -711,27 +708,27 @@ async def send_update(category: str, data: dict):
     if _last_item_hash.get(key) == h:
         return
     _last_item_hash[key] = h
-    line = f"**{category.capitalize()} update:** {data.get('item','(unknown)')} â€” **{data.get('stock','?')}**"
+    line = f"**{category.capitalize()} update:** {data.get('item','(unknown)')} — **{data.get('stock','?')}**"
     await ch.send(line)
 
 async def ws_consumer():
     global _last_merchant_name, _last_merchant_sig, _last_merchant_at
-    while not EXTERNAL_WS_URL:
-        print("[ws] EXTERNAL_WS_URL not set; retrying in 30s")
-        await asyncio.sleep(30)
-        globals()["EXTERNAL_WS_URL"] = os.getenv("EXTERNAL_WS_URL")
+    if not EXTERNAL_WS_URL:
+        print("[error] EXTERNAL_WS_URL not set")
+        await bot.close()
+        return
     headers = {}
     if WS_HEADERS_JSON.strip():
         try:
             headers = json.loads(WS_HEADERS_JSON)
         except Exception as e:
-            print(f"[ws] bad WS_HEADERS_JSON: {e}")
+            print(f"[warn] bad WS_HEADERS_JSON: {e}")
     subscribe = None
     if WS_SUBSCRIBE_JSON.strip():
         try:
             subscribe = json.loads(WS_SUBSCRIBE_JSON)
         except Exception as e:
-            print(f"[ws] bad WS_SUBSCRIBE_JSON: {e}")
+            print(f"[warn] bad WS_SUBSCRIBE_JSON: {e}")
     backoff = 1
     async with ClientSession() as session:
         while not bot.is_closed():
@@ -764,6 +761,7 @@ async def ws_consumer():
                             except Exception as e:
                                 print(f"[ws] unexpected json error: {e}")
                                 continue
+
                             global _DEBUG_SENT_ONCE
                             if DEBUG_RAW and not _DEBUG_SENT_ONCE:
                                 try:
@@ -772,7 +770,9 @@ async def ws_consumer():
                                 except Exception as e:
                                     print(f"[debug] send_debug failed: {e}")
                             processed_any = False
-                            if isinstance(raw, dict) and (any(isinstance(v, list) and isinstance(k, str) and k.endswith("_stock") for k, v in raw.items())
+
+                            if isinstance(raw, dict) and (
+                                any(isinstance(v, list) and isinstance(k, str) and k.endswith("_stock") for k, v in raw.items())
                                 or isinstance(raw.get("travelingmerchant_stock"), dict)):
                                 try:
                                     stock_map, extras = parse_stock_payload(raw)
@@ -809,7 +809,6 @@ async def ws_consumer():
                                     _last_merchant_sig = None
                                     _last_merchant_at  = 0.0
                                     processed_any = True
-
                                 for cat, items in stock_map.items():
                                     if cat == "merchant":
                                         continue
@@ -844,24 +843,16 @@ async def ws_consumer():
                                     except Exception as e:
                                         print(f"[ws] send_weather_embeds error: {e}")
                                 processed_any = True
-                        elif msg.type == WSMsgType.PING:
-                            try:
-                                await ws.pong()
-                            except Exception:
-                                pass
-                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR):
-                            raise RuntimeError(f"ws closed: {msg.type}")
-                        else:
-                            continue
-                print("[ws] disconnected; reconnecting")
+                        elif msg.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
+                            print("[ws] stream closed")
+                            break
+                    print("[ws] disconnected; reconnecting")
             except (ClientConnectorError, WSServerHandshakeError) as e:
-                print(f"[ws] connect error: {e}; retrying in {backoff}s")
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60)
+                print(f"[ws] connect error: {e}")
             except Exception as e:
-                print(f"[ws] unexpected: {e}; retrying in {backoff}s")
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60)
+                print(f"[ws] unexpected: {e}")
+            await asyncio.sleep(min(backoff, 30))
+            backoff *= 2
 
 @bot.event
 async def on_ready():
@@ -896,19 +887,7 @@ async def run_http_and_bot():
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     print(f"[http] listening on 0.0.0.0:{port}")
-    backoff = 5
-    while True:
-        try:
-            print("[bot] startingâ€¦")
-            await bot.start(DISCORD_TOKEN)
-        except Exception as e:
-            print(f"[bot] crashed: {e}; restarting in {backoff}s")
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 60)
-        else:
-            print("[bot] exited; restarting in 5s")
-            await asyncio.sleep(5)
-            backoff = 5
+    await bot.start(DISCORD_TOKEN)
 
 def main():
     if not DISCORD_TOKEN:
