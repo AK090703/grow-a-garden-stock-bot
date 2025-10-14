@@ -402,9 +402,12 @@ def _find_role(guild: discord.Guild, display_name: str, category: str) -> Option
         r = cache.get(_slug(cand))
         if r:
             return r
+    cache = _build_guild_role_cache(guild)
+    for cand in _role_candidates(display_name, category):
+        r = cache.get(_slug(cand))
+        if r:
+            return r
     return None
-
-
 
 async def send_debug(obj):
     if not DEBUG_RAW or not DEBUG_CHANNEL_ID: return
@@ -416,8 +419,6 @@ async def send_debug(obj):
     else:
         fp = io.BytesIO(s.encode("utf-8"))
         await ch.send("Full payload attached:", file=discord.File(fp, filename="payload.json"))
-
-
 
 def _deepcopy_json_safe(obj):
     try:
@@ -713,22 +714,22 @@ async def send_update(category: str, data: dict):
 
 async def ws_consumer():
     global _last_merchant_name, _last_merchant_sig, _last_merchant_at
-    if not EXTERNAL_WS_URL:
-        print("[error] EXTERNAL_WS_URL not set")
-        await bot.close()
-        return
+    while not EXTERNAL_WS_URL:
+        print("[ws] EXTERNAL_WS_URL not set; retrying in 30s")
+        await asyncio.sleep(30)
+        globals()["EXTERNAL_WS_URL"] = os.getenv("EXTERNAL_WS_URL")
     headers = {}
     if WS_HEADERS_JSON.strip():
         try:
             headers = json.loads(WS_HEADERS_JSON)
         except Exception as e:
-            print(f"[warn] bad WS_HEADERS_JSON: {e}")
+            print(f"[ws] bad WS_HEADERS_JSON: {e}")
     subscribe = None
     if WS_SUBSCRIBE_JSON.strip():
         try:
             subscribe = json.loads(WS_SUBSCRIBE_JSON)
         except Exception as e:
-            print(f"[warn] bad WS_SUBSCRIBE_JSON: {e}")
+            print(f"[ws] bad WS_SUBSCRIBE_JSON: {e}")
     backoff = 1
     async with ClientSession() as session:
         while not bot.is_closed():
@@ -761,7 +762,6 @@ async def ws_consumer():
                             except Exception as e:
                                 print(f"[ws] unexpected json error: {e}")
                                 continue
-
                             global _DEBUG_SENT_ONCE
                             if DEBUG_RAW and not _DEBUG_SENT_ONCE:
                                 try:
@@ -770,9 +770,7 @@ async def ws_consumer():
                                 except Exception as e:
                                     print(f"[debug] send_debug failed: {e}")
                             processed_any = False
-
-                            if isinstance(raw, dict) and (
-                                any(isinstance(v, list) and isinstance(k, str) and k.endswith("_stock") for k, v in raw.items())
+                            if isinstance(raw, dict) and (any(isinstance(v, list) and isinstance(k, str) and k.endswith("_stock") for k, v in raw.items())
                                 or isinstance(raw.get("travelingmerchant_stock"), dict)):
                                 try:
                                     stock_map, extras = parse_stock_payload(raw)
@@ -809,6 +807,7 @@ async def ws_consumer():
                                     _last_merchant_sig = None
                                     _last_merchant_at  = 0.0
                                     processed_any = True
+
                                 for cat, items in stock_map.items():
                                     if cat == "merchant":
                                         continue
@@ -843,16 +842,24 @@ async def ws_consumer():
                                     except Exception as e:
                                         print(f"[ws] send_weather_embeds error: {e}")
                                 processed_any = True
-                        elif msg.type in (WSMsgType.CLOSED, WSMsgType.ERROR):
-                            print("[ws] stream closed")
-                            break
-                    print("[ws] disconnected; reconnecting")
+                        elif msg.type == WSMsgType.PING:
+                            try:
+                                await ws.pong()
+                            except Exception:
+                                pass
+                        elif msg.type in (WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR):
+                            raise RuntimeError(f"ws closed: {msg.type}")
+                        else:
+                            continue
+                print("[ws] disconnected; reconnecting")
             except (ClientConnectorError, WSServerHandshakeError) as e:
-                print(f"[ws] connect error: {e}")
+                print(f"[ws] connect error: {e}; retrying in {backoff}s")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60)
             except Exception as e:
-                print(f"[ws] unexpected: {e}")
-            await asyncio.sleep(min(backoff, 30))
-            backoff *= 2
+                print(f"[ws] unexpected: {e}; retrying in {backoff}s")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60)
 
 @bot.event
 async def on_ready():
@@ -887,7 +894,19 @@ async def run_http_and_bot():
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     print(f"[http] listening on 0.0.0.0:{port}")
-    await bot.start(DISCORD_TOKEN)
+    backoff = 5
+    while True:
+        try:
+            print("[bot] starting…")
+            await bot.start(DISCORD_TOKEN)
+        except Exception as e:
+            print(f"[bot] crashed: {e}; restarting in {backoff}s")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+        else:
+            print("[bot] exited; restarting in 5s")
+            await asyncio.sleep(5)
+            backoff = 5
 
 def main():
     if not DISCORD_TOKEN:
