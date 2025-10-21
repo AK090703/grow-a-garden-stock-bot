@@ -1,6 +1,5 @@
 import os, json, asyncio, hashlib, signal, sys, io, time, re
 from typing import Dict, Tuple, Optional, List, Any
-
 import discord
 from discord import Embed, Intents, AllowedMentions, app_commands
 from aiohttp import ClientSession, ClientConnectorError, WSMsgType, web
