@@ -1,4 +1,4 @@
-import os, json, asyncio, hashlib, signal, sys, io, time, re, atexit
+import os, json, asyncio, hashlib, signal, sys, io, time, re
 from typing import Dict, Tuple, Optional, List, Any
 import discord
 from discord import Embed, Intents, AllowedMentions, app_commands
@@ -36,54 +36,6 @@ def _weather_key(w: dict) -> Optional[str]:
         return None
     k = (w.get("weather_name") or w.get("weather_id") or "").strip()
     return k or None
-
-_SEND_Q: asyncio.Queue = asyncio.Queue()
-_SEND_RPS = float(os.getenv("SEND_RPS", "4"))
-
-async def _send_worker():
-    gap = max(0.25, 1.0 / _SEND_RPS)
-    while True:
-        ch, kwargs = await _SEND_Q.get()
-        try:
-            await ch.send(**kwargs)
-            await asyncio.sleep(gap)
-        except Exception as e:
-            print(f"[send] error: {e}")
-        finally:
-            _SEND_Q.task_done()
-
-async def _safe_send(ch, **kwargs):
-    await _SEND_Q.put((ch, kwargs))
-
-LOCK_PATH = "/tmp/grow_garden_discord.lock"
-LOCK_TTL_SECS = 600
-
-def _acquire_singleton_lock() -> bool:
-    try:
-        if os.path.exists(LOCK_PATH):
-            age = time.time() - os.path.getmtime(LOCK_PATH)
-            if age > LOCK_TTL_SECS:
-                print(f"[lock] stale lock (age {int(age)}s) -> removing")
-                try:
-                    os.remove(LOCK_PATH)
-                except Exception as e:
-                    print(f"[lock] failed to remove stale lock: {e}")
-        fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
-        print("[lock] acquired singleton lock")
-        return True
-    except FileExistsError:
-        print("[lock] another instance is active; running as SECONDARY (HTTP-only)")
-        return False
-
-def _release_singleton_lock():
-    try:
-        if os.path.exists(LOCK_PATH):
-            os.remove(LOCK_PATH)
-            print("[lock] released")
-    except Exception as e:
-        print(f"[lock] release error: {e}")
 
 CATEGORY_CHANNELS = {
     "seeds":     int(os.getenv("CHANNEL_SEEDS", "0")),
@@ -472,10 +424,10 @@ async def send_debug(obj):
     if not ch: return
     s = json.dumps(obj, indent=2)
     if len(s) <= 1900:
-        await _safe_send(ch, content=f"```json\n{s}\n```")
+        await ch.send(f"```json\n{s}\n```")
     else:
         fp = io.BytesIO(s.encode("utf-8"))
-        await _safe_send(ch, content="Full payload attached:", file=discord.File(fp, filename="payload.json"))
+        await ch.send("Full payload attached:", file=discord.File(fp, filename="payload.json"))
 
 def _deepcopy_json_safe(obj):
     try:
@@ -613,7 +565,7 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
         if _last_cosmetics_sig == sig:
             return None
         content = _build_text_lines(category, items, title_hint=title_hint)
-        msg = await _safe_send(ch, content=content)
+        msg = await ch.send(content)
         _last_cosmetics_sig = sig
         return msg
     batch_signature = json.dumps([{"n": it.get("name"), "q": it.get("qty")} for it in items], sort_keys=False)
@@ -659,7 +611,7 @@ async def send_batch_text(category: str, items: List[dict], title_hint: Optional
             break
     content = "\n".join(lines)
     am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
-    await _safe_send(ch, content=content, allowed_mentions=am)
+    await ch.send(content, allowed_mentions=am)
 
 async def send_absent_notice(category: str, title_hint: Optional[str] = None):
     cid = CATEGORY_CHANNELS.get(category, 0)
@@ -675,7 +627,7 @@ async def send_absent_notice(category: str, title_hint: Optional[str] = None):
         msg = "**Active Weathers** — none."
     else:
         msg = f"**{category.capitalize()}** — no items."
-    await _safe_send(ch, content=msg)
+    await ch.send(msg)
 
 async def send_weather_embeds(active_weathers: List[dict]):
     if not active_weathers:
@@ -744,7 +696,7 @@ async def send_weather_embeds(active_weathers: List[dict]):
                 pass
         embeds.append(e)
     am = AllowedMentions(everyone=False, users=False, roles=list(set(roles_to_ping)))
-    await _safe_send(ch, content=content, embeds=embeds, allowed_mentions=am)
+    await ch.send(content=content, embeds=embeds, allowed_mentions=am)
     for w in to_post:
         raw_id = w.get("raw", w["name"])
         end_ts = None
@@ -767,7 +719,7 @@ async def send_update(category: str, data: dict):
         return
     _last_item_hash[key] = h
     line = f"**{category.capitalize()} update:** {data.get('item','(unknown)')} — **{data.get('stock','?')}**"
-    await _safe_send(ch, content=line)
+    await ch.send(line)
 
 async def ws_consumer():
     global _last_merchant_name, _last_merchant_sig, _last_merchant_at
@@ -951,11 +903,6 @@ async def run_http_and_bot():
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     print(f"[http] listening on 0.0.0.0:{port}")
-    asyncio.create_task(_send_worker())
-    owns_lock = _acquire_singleton_lock()
-    if not owns_lock:
-        while True:
-            await asyncio.sleep(3600)
     backoff = 5
     while True:
         try:
