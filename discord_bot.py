@@ -55,19 +55,6 @@ async def _send_worker():
 async def _safe_send(ch, **kwargs):
     await _SEND_Q.put((ch, kwargs))
 
-LOCK_PATH = "/tmp/grow_garden_discord.lock"
-
-def _acquire_singleton_lock() -> bool:
-    try:
-        fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
-        print("[lock] acquired singleton lock")
-        return True
-    except FileExistsError:
-        print("[lock] another instance is active; skipping Discord login")
-        return False
-
 CATEGORY_CHANNELS = {
     "seeds":     int(os.getenv("CHANNEL_SEEDS", "0")),
     "pets":      int(os.getenv("CHANNEL_PETS", "0")),
@@ -909,7 +896,6 @@ async def on_ready():
         print("[slash] commands synced")
     except Exception as e:
         print(f"[slash] sync failed: {e}")
-    bot.loop.create_task(_send_worker())
     bot.loop.create_task(ws_consumer())
 
 def shutdown(*_):
@@ -935,10 +921,6 @@ async def run_http_and_bot():
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
     await site.start()
     print(f"[http] listening on 0.0.0.0:{port}")
-    owns_lock = _acquire_singleton_lock()
-    if not owns_lock:
-        while True:
-            await asyncio.sleep(3600)
     backoff = 5
     while True:
         try:
