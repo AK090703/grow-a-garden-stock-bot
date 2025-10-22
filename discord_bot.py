@@ -896,6 +896,7 @@ async def on_ready():
         print("[slash] commands synced")
     except Exception as e:
         print(f"[slash] sync failed: {e}")
+    bot.loop.create_task(_send_worker())
     bot.loop.create_task(ws_consumer())
 
 def shutdown(*_):
